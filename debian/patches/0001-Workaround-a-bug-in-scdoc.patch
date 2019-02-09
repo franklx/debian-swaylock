@@ -1,0 +1,27 @@
+From: Birger Schacht <birger@rantanplan.org>
+Date: Sat, 9 Feb 2019 11:16:47 +0100
+Subject: Workaround a bug manpage generator
+
+scdoc doesn't escape a tick at the beginning of the line. until
+it does, we work around the issue so a tick doesn't occur on the
+beginning of a line.
+https://github.com/swaywm/swaylock/issues/48
+---
+ swaylock.1.scd | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/swaylock.1.scd b/swaylock.1.scd
+index 9c5ab46..d20306b 100644
+--- a/swaylock.1.scd
++++ b/swaylock.1.scd
+@@ -45,8 +45,8 @@ Locks your Wayland session.
+ 
+ *-i, --image* [[<output>]:]<path>
+ 	Display the given image, optionally only on the given output. Use -c to set
+-	a background color. If the path potentially contains a ':', prefix it with another
+-	':' to prevent interpreting part of it as <output>.
++	a background color. If the path potentially contains a ':', prefix it with
++	another ':' to prevent interpreting part of it as <output>.
+ 
+ *-L, --disable-caps-lock-text*
+ 	Disable the Caps Lock Text.
