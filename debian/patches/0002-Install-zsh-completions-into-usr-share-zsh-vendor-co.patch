@@ -1,0 +1,26 @@
+From c212e837af4be4fb061c5b0600d08471f4280f7d Mon Sep 17 00:00:00 2001
+From: Birger Schacht <birger@rantanplan.org>
+Date: Sun, 3 Mar 2019 18:25:15 +0100
+Subject: [PATCH] Install zsh completions into
+ /usr/share/zsh/vendor-completions
+
+---
+ meson.build | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+index 85dfe00..46b3c48 100644
+--- a/meson.build
++++ b/meson.build
+@@ -199,7 +199,7 @@ if get_option('zsh-completions')
+ 	zsh_files = files(
+ 		'completions/zsh/_swaylock',
+ 	)
+-	zsh_install_dir = datadir + '/zsh/site-functions'
++	zsh_install_dir = datadir + '/zsh/vendor-completions'
+ 
+ 	install_data(zsh_files, install_dir: zsh_install_dir)
+ endif
+-- 
+2.20.1
+
