@@ -6,12 +6,12 @@ Uploaders: Birger Schacht <birger@rantanplan.org>
 Build-Depends:
  debhelper-compat (= 12),
  libwayland-dev,
- wayland-protocols,
+ wayland-protocols (>=1.14),
  libcairo2-dev,
  libgdk-pixbuf2.0-dev,
  libpam0g-dev,
  libxkbcommon-dev,
- meson,
+ meson (>=0.48),
  pkgconf,
  scdoc
 Standards-Version: 4.3.0
