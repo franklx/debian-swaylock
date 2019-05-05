@@ -5,6 +5,7 @@ swaylock (1.4-1) unstable; urgency=medium
     there to set the version and that did not work
   * d/patches: add patch to set the upstream version in the buildfile
   * d/patches: update manpage patch
+  * d/gitlab-ci.yml: Add a basic gitlab ci configuration
 
  -- Birger Schacht <birger@rantanplan.org>  Fri, 03 May 2019 22:11:56 +0200
 
