@@ -3,6 +3,7 @@ swaylock (1.5-1) unstable; urgency=medium
   * New upstream release
   * Added d/gbp.conf file
   * d/control: Updated Vcs-* URLs for new repository
+  * d/patches: updated 0003-Fix-the-version-in-the-buildfile.patch
 
  -- Birger Schacht <birger@rantanplan.org>  Wed, 22 Jan 2020 19:51:19 +0100
 
