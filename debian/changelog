@@ -2,7 +2,9 @@ swaylock (1.5-1) unstable; urgency=medium
 
   * New upstream release
   * Added d/gbp.conf file
-  * d/control: Updated Vcs-* URLs for new repository
+  * d/control:
+    + Updated Vcs-* URLs for new repository
+    + Bump Standards-Version (no changes required)
   * d/patches:
     + updated 0003-Fix-the-version-in-the-buildfile.patch
     + updated 0001-Workaround-a-bug-in-scdoc.patch
