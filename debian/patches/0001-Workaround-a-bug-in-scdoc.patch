@@ -1,4 +1,4 @@
-From e2429248ae9517aab391fd1d6e6ef94981746d6c Mon Sep 17 00:00:00 2001
+From 09d199c3d9b5ef750c344f9e63400a19aa0a5926 Mon Sep 17 00:00:00 2001
 From: Birger Schacht <birger@rantanplan.org>
 Date: Fri, 3 May 2019 21:30:43 +0200
 Subject: [PATCH] Workaround a bug in mangpage generator
@@ -11,7 +11,7 @@ line. https://github.com/swaywm/swaylock/issues/48
  1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/swaylock.1.scd b/swaylock.1.scd
-index 62e4bc7..39df452 100644
+index 41ae07e..0d07ae1 100644
 --- a/swaylock.1.scd
 +++ b/swaylock.1.scd
 @@ -48,8 +48,8 @@ Locks your Wayland session.
@@ -24,7 +24,7 @@ index 62e4bc7..39df452 100644
 +	another ':' to prevent interpreting part of it as <output>.
  
  *-k, --show-keyboard-layout*
- 	Force displaying the current xkb layout while typing, even if only one layout
+ 	Display the current xkb layout while typing.
 -- 
-2.20.1
+2.25.0
 
