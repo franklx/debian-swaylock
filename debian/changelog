@@ -2,8 +2,9 @@ swaylock (1.5-1) unstable; urgency=medium
 
   * New upstream release
   * Added d/gbp.conf file
+  * d/control: Updated Vcs-* URLs for new repository
 
- -- Birger Schacht <birger@rantanplan.org>  Wed, 22 Jan 2020 19:48:56 +0100
+ -- Birger Schacht <birger@rantanplan.org>  Wed, 22 Jan 2020 19:51:19 +0100
 
 swaylock (1.4-1) unstable; urgency=medium
 
