@@ -4,6 +4,7 @@ swaylock (1.5-1) unstable; urgency=medium
   * Added d/gbp.conf file
   * d/control:
     + Updated Vcs-* URLs for new repository
+    + Updated Maintainer and Uploaders field
     + Bump Standards-Version (no changes required)
   * d/patches:
     + updated 0003-Fix-the-version-in-the-buildfile.patch
