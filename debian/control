@@ -15,7 +15,7 @@ Build-Depends:
  meson (>=0.48),
  pkgconf,
  scdoc
-Standards-Version: 4.4.1
+Standards-Version: 4.5.0
 Homepage: https://github.com/swaywm/swaylock
 Vcs-Browser: https://salsa.debian.org/swaywm-team/swaylock
 Vcs-Git: https://salsa.debian.org/swaywm-team/swaylock.git
