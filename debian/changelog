@@ -1,3 +1,9 @@
+swaylock (1.5-2) unstable; urgency=medium
+
+  * Source only upload as-is.
+
+ -- Birger Schacht <birger@rantanplan.org>  Mon, 10 Feb 2020 11:14:16 +0100
+
 swaylock (1.5-1) unstable; urgency=medium
 
   * New upstream release
