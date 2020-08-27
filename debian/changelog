@@ -1,3 +1,9 @@
+swaylock (1.5-3) UNRELEASED; urgency=low
+
+  * Set field Upstream-Name in debian/copyright.
+
+ -- Debian Janitor <janitor@jelmer.uk>  Thu, 27 Aug 2020 15:56:31 -0000
+
 swaylock (1.5-2) unstable; urgency=medium
 
   * Source only upload as-is.
