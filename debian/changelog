@@ -1,6 +1,7 @@
 swaylock (1.5-3) UNRELEASED; urgency=low
 
   * Set field Upstream-Name in debian/copyright.
+  * Set upstream metadata fields: Bug-Database, Bug-Submit.
 
  -- Debian Janitor <janitor@jelmer.uk>  Thu, 27 Aug 2020 15:56:31 -0000
 
