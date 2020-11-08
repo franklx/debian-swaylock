@@ -1,5 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Source: https://github.com/swaywm/swaylock
+Upstream-Name: swaylock
 
 Files: *
 Copyright: © 2016-2019 Drew DeVault <sir@cmpwn.com>
