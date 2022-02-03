@@ -1,0 +1,3780 @@
+## Description: add some description
+## Origin/Author: add some origin or author
+## Bug: bug URL
+diff -urN swaylock-1.5/background-image.c swaylock-effects/background-image.c
+--- swaylock-1.5/background-image.c	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/background-image.c	2022-01-29 23:27:40.716097181 +0100
+@@ -2,6 +2,35 @@
+ #include "background-image.h"
+ #include "cairo.h"
+ #include "log.h"
++#include "swaylock.h"
++
++// Cairo RGB24 uses 32 bits per pixel, as XRGB, in native endianness.
++// xrgb32_le uses 32 bits per pixel, as XRGB, little endian (BGRX big endian).
++void cairo_rgb24_from_xrgb32_le(unsigned char *buf, int width, int height, int stride) {
++	for (int y = 0; y < height; ++y) {
++		for (int x = 0; x < width; ++x) {
++			unsigned char *pix = buf + y * stride + x * 4;
++			*(uint32_t *)pix = 0 |
++				(uint32_t)pix[2] << 16 |
++				(uint32_t)pix[1] << 8 |
++				(uint32_t)pix[0];
++		}
++	}
++}
++
++// Cairo RGB24 uses 32 bits per pixel, as XRGB, in native endianness.
++// xbgr32_le uses 32 bits per pixel, as XBGR, little endian (RGBX big endian).
++void cairo_rgb24_from_xbgr32_le(unsigned char *buf, int width, int height, int stride) {
++	for (int y = 0; y < height; ++y) {
++		for (int x = 0; x < width; ++x) {
++			unsigned char *pix = buf + y * stride + x * 4;
++			*(uint32_t *)pix = 0 |
++				(uint32_t)pix[0] << 16 |
++				(uint32_t)pix[1] << 8 |
++				(uint32_t)pix[2];
++		}
++	}
++}
+ 
+ enum background_mode parse_background_mode(const char *mode) {
+ 	if (strcmp(mode, "stretch") == 0) {
+@@ -21,6 +50,147 @@
+ 	return BACKGROUND_MODE_INVALID;
+ }
+ 
++cairo_surface_t *load_background_from_buffer(void *buf, uint32_t format,
++		uint32_t width, uint32_t height, uint32_t stride, enum wl_output_transform transform) {
++	bool rotated =
++		transform == WL_OUTPUT_TRANSFORM_90 ||
++		transform == WL_OUTPUT_TRANSFORM_270 ||
++		transform == WL_OUTPUT_TRANSFORM_FLIPPED_90 ||
++		transform == WL_OUTPUT_TRANSFORM_FLIPPED_270;
++
++	cairo_surface_t *image;
++	if (rotated) {
++		image = cairo_image_surface_create(CAIRO_FORMAT_RGB24, height, width);
++	} else {
++		image = cairo_image_surface_create(CAIRO_FORMAT_RGB24, width, height);
++	}
++	if (image == NULL) {
++		swaylock_log(LOG_ERROR, "Failed to create image..");
++		return NULL;
++	}
++
++	unsigned char *destbuf = cairo_image_surface_get_data(image);
++	size_t destwidth = cairo_image_surface_get_width(image);
++	size_t destheight = cairo_image_surface_get_height(image);
++	size_t deststride = cairo_image_surface_get_stride(image);
++	unsigned char *srcbuf = buf;
++	size_t srcstride = stride;
++	size_t minstride = srcstride < deststride ? srcstride : deststride;
++
++	// Lots of these are mostly-copy-and-pasted, with a lot of boilerplate
++	// for each case.
++	// The only interesting differencess between a lot of these cases are
++	// the definitions of srcx and srcy.
++	// I don't think it's worth adding a macro to make this "cleaner" though,
++	// as that would obfuscate what's actually going on.
++	switch (transform) {
++	case WL_OUTPUT_TRANSFORM_NORMAL:
++		// In most cases, the transform is probably normal. Luckily, it can be
++		// done with just one big memcpy.
++		if (srcstride == deststride) {
++			memcpy(destbuf, srcbuf, destheight * deststride);
++		} else {
++			for (size_t y = 0; y < destheight; ++y) {
++				memcpy(destbuf + y * deststride, srcbuf + y * srcstride, minstride);
++			}
++		}
++		break;
++	case WL_OUTPUT_TRANSFORM_90:
++		for (size_t desty = 0; desty < destheight; ++desty) {
++			size_t srcx = desty;
++			for (size_t destx = 0; destx < destwidth; ++destx) {
++				size_t srcy = destwidth - destx - 1;
++				*((uint32_t *)(destbuf + desty * deststride) + destx) =
++					*((uint32_t *)(srcbuf + srcy * srcstride) + srcx);
++			}
++		}
++		break;
++	case WL_OUTPUT_TRANSFORM_180:
++		for (size_t desty = 0; desty < destheight; ++desty) {
++			size_t srcy = destheight - desty - 1;
++			for (size_t destx = 0; destx < destwidth; ++destx) {
++				size_t srcx = destwidth - destx - 1;
++				*((uint32_t *)(destbuf + desty * deststride) + destx) =
++					*((uint32_t *)(srcbuf + srcy * srcstride) + srcx);
++			}
++		}
++		break;
++	case WL_OUTPUT_TRANSFORM_270:
++		for (size_t desty = 0; desty < destheight; ++desty) {
++			size_t srcx = destheight - desty - 1;
++			for (size_t destx = 0; destx < destwidth; ++destx) {
++				size_t srcy = destx;
++				*((uint32_t *)(destbuf + desty * deststride) + destx) =
++					*((uint32_t *)(srcbuf + srcy * srcstride) + srcx);
++			}
++		}
++		break;
++	case WL_OUTPUT_TRANSFORM_FLIPPED:
++		for (size_t desty = 0; desty < destheight; ++desty) {
++			size_t srcy = desty;
++			for (size_t destx = 0; destx < destwidth; ++destx) {
++				size_t srcx = destwidth - destx - 1;
++				*((uint32_t *)(destbuf + desty * deststride) + destx) =
++					*((uint32_t *)(srcbuf + srcy * srcstride) + srcx);
++			}
++		}
++		break;
++	case WL_OUTPUT_TRANSFORM_FLIPPED_90:
++		for (size_t desty = 0; desty < destheight; ++desty) {
++			size_t srcx = desty;
++			for (size_t destx = 0; destx < destwidth; ++destx) {
++				size_t srcy = destx;
++				*((uint32_t *)(destbuf + desty * deststride) + destx) =
++					*((uint32_t *)(srcbuf + srcy * srcstride) + srcx);
++			}
++		}
++		break;
++	case WL_OUTPUT_TRANSFORM_FLIPPED_180:
++		for (size_t desty = 0; desty < destheight; ++desty) {
++			size_t srcy = destheight - desty - 1;
++			memcpy(destbuf + desty * deststride, srcbuf + srcy * srcstride, minstride);
++		}
++		break;
++	case WL_OUTPUT_TRANSFORM_FLIPPED_270:
++		for (size_t desty = 0; desty < destheight; ++desty) {
++			size_t srcx = destheight - desty - 1;
++			for (size_t destx = 0; destx < destwidth; ++destx) {
++				size_t srcy = destwidth - destx - 1;
++				*((uint32_t *)(destbuf + desty * deststride) + destx) =
++					*((uint32_t *)(srcbuf + srcy * srcstride) + srcx);
++			}
++		}
++		break;
++	}
++
++	if (format == WL_SHM_FORMAT_XBGR8888 || format == WL_SHM_FORMAT_ABGR8888) {
++		cairo_rgb24_from_xbgr32_le(
++				cairo_image_surface_get_data(image),
++				cairo_image_surface_get_width(image),
++				cairo_image_surface_get_height(image),
++				cairo_image_surface_get_stride(image));
++	} else {
++		if (format != WL_SHM_FORMAT_XRGB8888 && format != WL_SHM_FORMAT_ARGB8888) {
++			swaylock_log(LOG_ERROR,
++					"Unknown pixel format: %u. Assuming XRGB32. Colors may look wrong.",
++					format);
++		}
++
++		// If we're little endian, we don't have to do anything
++		int test = 1;
++		bool is_little_endian = *(char *)&test == 1;
++		if (!is_little_endian) {
++			cairo_rgb24_from_xrgb32_le(
++					cairo_image_surface_get_data(image),
++					cairo_image_surface_get_width(image),
++					cairo_image_surface_get_height(image),
++					cairo_image_surface_get_stride(image));
++		}
++	}
++
++	return image;
++}
++
+ cairo_surface_t *load_background_image(const char *path) {
+ 	cairo_surface_t *image;
+ #if HAVE_GDK_PIXBUF
+diff -urN swaylock-1.5/completions/bash/swaylock swaylock-effects/completions/bash/swaylock
+--- swaylock-1.5/completions/bash/swaylock	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/completions/bash/swaylock	2022-01-29 23:27:40.716097181 +0100
+@@ -45,6 +45,8 @@
+     --indicator-idle-visible
+     --indicator-radius
+     --indicator-thickness
++    --indicator-x-position
++    --indicator-y-position
+     --inside-caps-lock-color
+     --inside-clear-color
+     --inside-color
+diff -urN swaylock-1.5/completions/fish/swaylock.fish swaylock-effects/completions/fish/swaylock.fish
+--- swaylock-1.5/completions/fish/swaylock.fish	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/completions/fish/swaylock.fish	2022-01-29 23:27:40.716097181 +0100
+@@ -18,6 +18,8 @@
+ complete -c swaylock -l indicator-idle-visible      --description "Sets the indicator to show even if idle."
+ complete -c swaylock -l indicator-radius            --description "Sets the indicator radius."
+ complete -c swaylock -l indicator-thickness         --description "Sets the indicator thickness."
++complete -c swaylock -l indicator-x-position        --description "Sets the horizontal position of the indicator."
++complete -c swaylock -l indicator-y-position        --description "Sets the vertical position of the indicator."
+ complete -c swaylock -l inside-caps-lock-color      --description "Sets the color of the inside of the indicator when Caps Lock is active."
+ complete -c swaylock -l inside-clear-color          --description "Sets the color of the inside of the indicator when cleared."
+ complete -c swaylock -l inside-color                --description "Sets the color of the inside of the indicator."
+diff -urN swaylock-1.5/completions/zsh/_swaylock swaylock-effects/completions/zsh/_swaylock
+--- swaylock-1.5/completions/zsh/_swaylock	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/completions/zsh/_swaylock	2022-01-29 23:27:40.716097181 +0100
+@@ -22,6 +22,8 @@
+ 	'(--indicator-idle-visible)'--indicator-idle-visible'[Sets the indicator to show even if idle]' \
+ 	'(--indicator-radius)'--indicator-radius'[Sets the indicator radius]:radius:' \
+ 	'(--indicator-thickness)'--indicator-thickness'[Sets the indicator thickness]:thickness:' \
++	'(--indicator-x-position)'--indicator-x-position'[Sets the horizontal position of the indicator]' \
++	'(--indicator-y-position)'--indicator-y-position'[Sets the vertical position of the indicator]' \
+ 	'(--inside-caps-lock-color)'--inside-caps-lock-color'[Sets the color of the inside of the indicator when Caps Lock is active]:color:' \
+ 	'(--inside-clear-color)'--inside-clear-color'[Sets the color of the inside of the indicator when cleared]:color:' \
+ 	'(--inside-color)'--inside-color'[Sets the color of the inside of the indicator]:color:' \
+diff -urN swaylock-1.5/debian/changelog swaylock-effects/debian/changelog
+diff -urN swaylock-1.5/debian/control swaylock-effects/debian/control
+diff -urN swaylock-1.5/debian/copyright swaylock-effects/debian/copyright
+diff -urN swaylock-1.5/debian/gbp.conf swaylock-effects/debian/gbp.conf
+diff -urN swaylock-1.5/debian/gitlab-ci.yml swaylock-effects/debian/gitlab-ci.yml
+diff -urN swaylock-1.5/debian/patches/0001-Workaround-a-bug-in-scdoc.patch swaylock-effects/debian/patches/0001-Workaround-a-bug-in-scdoc.patch
+diff -urN swaylock-1.5/debian/patches/0002-Install-zsh-completions-into-usr-share-zsh-vendor-co.patch swaylock-effects/debian/patches/0002-Install-zsh-completions-into-usr-share-zsh-vendor-co.patch
+diff -urN swaylock-1.5/debian/patches/0003-Fix-the-version-in-the-buildfile.patch swaylock-effects/debian/patches/0003-Fix-the-version-in-the-buildfile.patch
+diff -urN swaylock-1.5/debian/patches/series swaylock-effects/debian/patches/series
+diff -urN swaylock-1.5/debian/rules swaylock-effects/debian/rules
+diff -urN swaylock-1.5/debian/source/format swaylock-effects/debian/source/format
+diff -urN swaylock-1.5/debian/upstream/metadata swaylock-effects/debian/upstream/metadata
+diff -urN swaylock-1.5/debian/upstream/signing-key.asc swaylock-effects/debian/upstream/signing-key.asc
+diff -urN swaylock-1.5/debian/watch swaylock-effects/debian/watch
+diff -urN swaylock-1.5/effects.c swaylock-effects/effects.c
+--- swaylock-1.5/effects.c	1970-01-01 01:00:00.000000000 +0100
++++ swaylock-effects/effects.c	2022-01-29 23:27:40.716097181 +0100
+@@ -0,0 +1,757 @@
++#define _POSIX_C_SOURCE 200809
++#define _XOPEN_SOURCE 700
++#include <omp.h>
++#include <limits.h>
++#include <stdlib.h>
++#include <stdbool.h>
++#include <dlfcn.h>
++#include <string.h>
++#include <errno.h>
++#include <sys/wait.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <unistd.h>
++#include <spawn.h>
++#include <time.h>
++#include <stdio.h>
++#include "effects.h"
++#include "log.h"
++
++// glib might or might not have already defined MIN,
++// depending on whether we have pixbuf or not...
++#ifndef MIN
++#define MIN(a, b) ((a) < (b) ? (a) : (b))
++#endif
++
++extern char **environ;
++
++static int screen_size_to_pix(struct swaylock_effect_screen_pos size, int screensize, int scale) {
++	if (size.is_percent) {
++		return (size.pos / 100.0) * screensize;
++	} else if (size.pos > 0) {
++		return size.pos * scale;
++	} else {
++		return size.pos;
++	}
++}
++
++static int screen_pos_to_pix(struct swaylock_effect_screen_pos pos, int screensize, int scale) {
++	int actual;
++	if (pos.is_percent) {
++		actual = (pos.pos / 100.0) * screensize;
++	} else {
++		actual = pos.pos * scale;
++	}
++
++	if (actual < 0) {
++		actual = screensize + actual;
++	}
++
++	return actual;
++}
++
++static const char *effect_name(struct swaylock_effect *effect) {
++	switch (effect->tag) {
++	case EFFECT_BLUR: return "blur";
++	case EFFECT_PIXELATE: return "pixelate";
++	case EFFECT_SCALE: return "scale";
++	case EFFECT_GREYSCALE: return "greyscale";
++	case EFFECT_VIGNETTE: return "vignette";
++	case EFFECT_COMPOSE: return "compose";
++	case EFFECT_CUSTOM: return effect->e.custom;
++	}
++
++	abort();
++}
++
++static void screen_pos_pair_to_pix(
++		struct swaylock_effect_screen_pos posx,
++		struct swaylock_effect_screen_pos posy,
++		int objwidth, int objheight,
++		int screenwidth, int screenheight, int scale, int gravity,
++		int *outx, int *outy) {
++	int x = screen_pos_to_pix(posx, screenwidth, scale);
++	int y = screen_pos_to_pix(posy, screenheight, scale);
++
++	// Adjust X
++	switch (gravity) {
++	case EFFECT_COMPOSE_GRAV_CENTER:
++	case EFFECT_COMPOSE_GRAV_N:
++	case EFFECT_COMPOSE_GRAV_S:
++		x -= objwidth / 2;
++		break;
++	case EFFECT_COMPOSE_GRAV_NW:
++	case EFFECT_COMPOSE_GRAV_SW:
++	case EFFECT_COMPOSE_GRAV_W:
++		break;
++	case EFFECT_COMPOSE_GRAV_NE:
++	case EFFECT_COMPOSE_GRAV_SE:
++	case EFFECT_COMPOSE_GRAV_E:
++		x -= objwidth;
++		break;
++	}
++
++	// Adjust Y
++	switch (gravity) {
++	case EFFECT_COMPOSE_GRAV_CENTER:
++	case EFFECT_COMPOSE_GRAV_W:
++	case EFFECT_COMPOSE_GRAV_E:
++		y -= objheight / 2;
++		break;
++	case EFFECT_COMPOSE_GRAV_NW:
++	case EFFECT_COMPOSE_GRAV_NE:
++	case EFFECT_COMPOSE_GRAV_N:
++		break;
++	case EFFECT_COMPOSE_GRAV_SW:
++	case EFFECT_COMPOSE_GRAV_SE:
++	case EFFECT_COMPOSE_GRAV_S:
++		y -= objheight;
++		break;
++	}
++
++	*outx = x;
++	*outy = y;
++}
++
++static uint32_t blend_pixels(float alpha, uint32_t srcpix, uint32_t destpix) {
++	uint8_t srcr = (srcpix & 0x00ff0000) >> 16;
++	uint8_t destr = (destpix & 0x00ff0000) >> 16;
++	uint8_t srcg = (srcpix & 0x0000ff00) >> 8;
++	uint8_t destg = (destpix & 0x0000ff00) >> 8;
++	uint8_t srcb = (srcpix & 0x000000ff) >> 0;
++	uint8_t destb = (destpix & 0x000000ff) >> 0;
++
++	return (uint32_t)0 |
++		(uint32_t)255 << 24 |
++		(uint32_t)(srcr + destr * (1 - alpha)) << 16 |
++		(uint32_t)(srcg + destg * (1 - alpha)) << 8 |
++		(uint32_t)(srcb + destb * (1 - alpha)) << 0;
++}
++
++static void blur_h(uint32_t *dest, uint32_t *src, int width, int height,
++		int radius) {
++	const int minradius = radius < width ? radius : width;
++
++#pragma omp parallel for
++	for (int y = 0; y < height; ++y) {
++		uint32_t *srow = src + y * width;
++		uint32_t *drow = dest + y * width;
++
++		// 'range' is float, because floating point division is usually faster
++		// than integer division.
++		int r_acc = 0;
++		int g_acc = 0;
++		int b_acc = 0;
++		float range = minradius;
++
++		// Accumulate the range (0..radius)
++		for (int x = 0; x < minradius; ++x) {
++			r_acc += (srow[x] & 0xff0000) >> 16;
++			g_acc += (srow[x] & 0x00ff00) >> 8;
++			b_acc += (srow[x] & 0x0000ff);
++		}
++
++		// Deal with the main body
++		for (int x = 0; x < width; ++x) {
++			if (x >= minradius) {
++				r_acc -= (srow[x - radius] & 0xff0000) >> 16;
++				g_acc -= (srow[x - radius] & 0x00ff00) >> 8;
++				b_acc -= (srow[x - radius] & 0x0000ff);
++				range -= 1;
++			}
++
++			if (x < width - minradius) {
++				r_acc += (srow[x + radius] & 0xff0000) >> 16;
++				g_acc += (srow[x + radius] & 0x00ff00) >> 8;
++				b_acc += (srow[x + radius] & 0x0000ff);
++				range += 1;
++			}
++
++			drow[x] = 0 |
++				(int)(r_acc / range) << 16 |
++				(int)(g_acc / range) << 8 |
++				(int)(b_acc / range);
++		}
++	}
++}
++
++static void blur_v(uint32_t *dest, uint32_t *src, int width, int height,
++		int radius) {
++	const int minradius = radius < height ? radius : height;
++
++#pragma omp parallel for
++	for (int x = 0; x < width; ++x) {
++		uint32_t *scol = src + x;
++		uint32_t *dcol = dest + x;
++
++		// 'range' is float, because floating point division is usually faster
++		// than integer division.
++		int r_acc = 0;
++		int g_acc = 0;
++		int b_acc = 0;
++		float range = minradius;
++
++		// Accumulate the range (0..radius)
++		for (int y = 0; y < minradius; ++y) {
++			r_acc += (scol[y * width] & 0xff0000) >> 16;
++			g_acc += (scol[y * width] & 0x00ff00) >> 8;
++			b_acc += (scol[y * width] & 0x0000ff);
++		}
++
++		// Deal with the main body
++		for (int y = 0; y < height; ++y) {
++			if (y >= minradius) {
++				r_acc -= (scol[(y - radius) * width] & 0xff0000) >> 16;
++				g_acc -= (scol[(y - radius) * width] & 0x00ff00) >> 8;
++				b_acc -= (scol[(y - radius) * width] & 0x0000ff);
++				range -= 1;
++			}
++
++			if (y < height - minradius) {
++				r_acc += (scol[(y + radius) * width] & 0xff0000) >> 16;
++				g_acc += (scol[(y + radius) * width] & 0x00ff00) >> 8;
++				b_acc += (scol[(y + radius) * width] & 0x0000ff);
++				range += 1;
++			}
++
++			dcol[y * width] = 0 |
++				(int)(r_acc / range) << 16 |
++				(int)(g_acc / range) << 8 |
++				(int)(b_acc / range);
++		}
++	}
++}
++
++static void blur_once(uint32_t *dest, uint32_t *src, uint32_t *scratch,
++		int width, int height, int radius) {
++	blur_h(scratch, src, width, height, radius);
++	blur_v(dest, scratch, width, height, radius);
++}
++
++// This effect_blur function, and the associated blur_* functions,
++// are my own adaptations of code in yvbbrjdr's i3lock-fancy-rapid:
++// https://github.com/yvbbrjdr/i3lock-fancy-rapid
++static void effect_blur(uint32_t *dest, uint32_t *src, int width, int height, int scale,
++		int radius, int times) {
++	uint32_t *origdest = dest;
++
++	uint32_t *scratch = malloc(width * height * sizeof(*scratch));
++	blur_once(dest, src, scratch, width, height, radius * scale);
++	for (int i = 0; i < times - 1; ++i) {
++		uint32_t *tmp = src;
++		src = dest;
++		dest = tmp;
++		blur_once(dest, src, scratch, width, height, radius * scale);
++	}
++	free(scratch);
++
++	// We're flipping between using dest and src;
++	// if the last buffer we used was src, copy that over to dest.
++	if (dest != origdest)
++		memcpy(origdest, dest, width * height * sizeof(*dest));
++}
++
++static void effect_pixelate(uint32_t *data, int width, int height, int scale, int factor) {
++	factor *= scale;
++#pragma omp parallel for
++	for (int y = 0; y < height / factor + 1; ++y) {
++		for (int x = 0; x < width / factor + 1; ++x) {
++			int total_r = 0, total_g = 0, total_b = 0;
++
++			int xstart = x * factor;
++			int ystart = y * factor;
++			int xlim = MIN(xstart + factor, width);
++			int ylim = MIN(ystart + factor, height);
++
++			// Average
++			for (int ry = ystart; ry < ylim; ++ry) {
++				for (int rx = xstart; rx < xlim; ++rx) {
++					int index = ry * width + rx;
++					total_r += (data[index] & 0xff0000) >> 16;
++					total_g += (data[index] & 0x00ff00) >> 8;
++					total_b += (data[index] & 0x0000ff);
++				}
++			}
++
++			int r = total_r / (factor * factor);
++			int g = total_g / (factor * factor);
++			int b = total_b / (factor * factor);
++
++			// Fill pixels
++			for (int ry = ystart; ry < ylim; ++ry) {
++				for (int rx = xstart; rx < xlim; ++rx) {
++					int index = ry * width + rx;
++					data[index] = r << 16 | g << 8 | b;
++				}
++			}
++		}
++	}
++}
++
++static void effect_scale(uint32_t *dest, uint32_t *src, int swidth, int sheight,
++		double scale) {
++	int dwidth = swidth * scale;
++	int dheight = sheight * scale;
++	double fact = 1.0 / scale;
++
++#pragma omp parallel for
++	for (int dy = 0; dy < dheight; ++dy) {
++		int sy = dy * fact;
++		if (sy >= sheight) continue;
++		for (int dx = 0; dx < dwidth; ++dx) {
++			int sx = dx * fact;
++			if (sx >= swidth) continue;
++			dest[dy * dwidth + dx] = src[sy * swidth + sx];
++		}
++	}
++}
++
++static void effect_greyscale(uint32_t *data, int width, int height) {
++#pragma omp parallel for
++	for (int y = 0; y < height; ++y) {
++		for (int x = 0; x < width; ++x) {
++			int index = y * width + x;
++			int r = (data[index] & 0xff0000) >> 16;
++			int g = (data[index] & 0x00ff00) >> 8;
++			int b = (data[index] & 0x0000ff);
++			int luma = 0.2989 * r + 0.5870 * g + 0.1140 * b;
++			if (luma < 0) luma = 0;
++			if (luma > 255) luma = 255;
++			luma &= 0xFF;
++			data[index] = luma << 16 | luma << 8 | luma;
++		}
++	}
++}
++
++static void effect_vignette(uint32_t *data, int width, int height,
++		double base, double factor) {
++	base = fmin(1, fmax(0, base));
++	factor = fmin(1 - base, fmax(0, factor));
++#pragma omp parallel for
++	for (int y = 0; y < height; ++y) {
++		for (int x = 0; x < width; ++x) {
++
++			double xf = (x * 1.0) / width;
++			double yf = (y * 1.0) / height;
++			double vignette_factor = base + factor
++				* 16 * xf * yf * (1.0 - xf) * (1.0 - yf);
++
++			int index = y * width + x;
++			int r = (data[index] & 0xff0000) >> 16;
++			int g = (data[index] & 0x00ff00) >> 8;
++			int b = (data[index] & 0x0000ff);
++
++			r = (int)(r * vignette_factor) & 0xFF;
++			g = (int)(g * vignette_factor) & 0xFF;
++			b = (int)(b * vignette_factor) & 0xFF;
++
++			data[index] = r << 16 | g << 8 | b;
++		}
++	}
++}
++
++static void effect_compose(uint32_t *data, int width, int height, int scale,
++		struct swaylock_effect_screen_pos posx,
++		struct swaylock_effect_screen_pos posy,
++		struct swaylock_effect_screen_pos posw,
++		struct swaylock_effect_screen_pos posh,
++		int gravity, char *imgpath) {
++#if !HAVE_GDK_PIXBUF
++	(void)&blend_pixels;
++	(void)&screen_size_to_pix;
++	(void)&screen_pos_pair_to_pix;
++	swaylock_log(LOG_ERROR, "Compose effect: Compiled without gdk_pixbuf support.\n");
++	return;
++#else
++	int imgw = screen_size_to_pix(posw, width, scale);
++	int imgh = screen_size_to_pix(posh, height, scale);
++	bool preserve_aspect = imgw < 0 || imgh < 0;
++
++	GError *err = NULL;
++	GdkPixbuf *pixbuf = gdk_pixbuf_new_from_file_at_scale(
++			imgpath, imgw, imgh, preserve_aspect, &err);
++	if (!pixbuf) {
++		swaylock_log(LOG_ERROR, "Compose effect: Failed to load image file '%s' (%s).",
++				imgpath, err->message);
++		g_error_free(err);
++		return;
++	}
++
++	cairo_surface_t *image = gdk_cairo_image_surface_create_from_pixbuf(pixbuf);
++	g_object_unref(pixbuf);
++
++	int bufw = cairo_image_surface_get_width(image);
++	int bufh = cairo_image_surface_get_height(image);
++	uint32_t *bufdata = (uint32_t *)cairo_image_surface_get_data(image);
++	int bufstride = cairo_image_surface_get_stride(image) / 4;
++	bool bufalpha = cairo_image_surface_get_format(image) == CAIRO_FORMAT_ARGB32;
++
++	int imgx, imgy;
++	screen_pos_pair_to_pix(
++			posx, posy, bufw, bufh,
++			width, height, scale, gravity,
++			&imgx, &imgy);
++
++#pragma omp parallel for
++	for (int offy = 0; offy < bufh; ++offy) {
++		if (offy + imgy < 0 || offy + imgy > height)
++			continue;
++
++		for (int offx = 0; offx < bufw; ++offx) {
++			if (offx + imgx < 0 || offx + imgx > width)
++				continue;
++
++			size_t idx = (size_t)(offy + imgy) * width + (offx + imgx);
++			size_t bufidx = (size_t)offy * bufstride + (offx);
++
++			if (!bufalpha) {
++				data[idx] = bufdata[bufidx];
++			} else {
++				uint8_t alpha = (bufdata[bufidx] & 0xff000000) >> 24;
++				if (alpha == 255) {
++					data[idx] = bufdata[bufidx];
++				} else if (alpha != 0) {
++					data[idx] = blend_pixels(alpha / 255.0, bufdata[bufidx], data[idx]);
++				}
++			}
++		}
++	}
++
++	cairo_surface_destroy(image);
++#endif
++}
++
++static void effect_custom_run(uint32_t *data, int width, int height, int scale,
++		char *path) {
++	void *dl = dlopen(path, RTLD_LAZY);
++	if (dl == NULL) {
++		swaylock_log(LOG_ERROR, "Custom effect: %s", dlerror());
++		return;
++	}
++
++	void (*effect_func)(uint32_t *data, int width, int height, int scale) =
++		dlsym(dl, "swaylock_effect");
++	if (effect_func != NULL) {
++		effect_func(data, width, height, scale);
++		dlclose(dl);
++		return;
++	}
++
++	uint32_t (*pixel_func)(uint32_t pix, int x, int y, int width, int height) =
++		dlsym(dl, "swaylock_pixel");
++	if (pixel_func != NULL) {
++#pragma omp parallel for
++		for (int y = 0; y < height; ++y) {
++			for (int x = 0; x < width; ++x) {
++				data[y * width + x] =
++					pixel_func(data[y * width + x], x, y, width, height);
++			}
++		}
++
++		dlclose(dl);
++		return;
++	}
++
++	(void)dlsym(dl, "swaylock_effect"); // Change the result of dlerror()
++	swaylock_log(LOG_ERROR, "Custom effect: %s", dlerror());
++}
++
++static bool file_is_outdated(const char *input, const char *output) {
++	struct stat instat, outstat;
++	if (stat(input, &instat) < 0) {
++		return true;
++	}
++
++	if (stat(output, &outstat) < 0) {
++		return true;
++	}
++
++	if (instat.st_mtim.tv_sec > outstat.st_mtim.tv_sec) {
++		return true;
++	}
++
++	if (
++			instat.st_mtim.tv_sec == outstat.st_mtim.tv_sec &&
++			instat.st_mtim.tv_nsec >= outstat.st_mtim.tv_nsec) {
++		return true;
++	}
++
++	return false;
++}
++
++static char *effect_custom_compile(const char *path) {
++	static char *cachepath = NULL;
++	static size_t cachelen;
++	if (!cachepath) {
++		char *xdgdir = getenv("XDG_DATA_HOME");
++		if (xdgdir) {
++			cachepath = malloc(strlen(xdgdir) + strlen("/swaylock") + 1);
++			cachelen = sprintf(cachepath, "%s/swaylock", xdgdir);
++		} else {
++			char *homedir = getenv("HOME");
++			if (homedir == NULL) {
++				swaylock_log(LOG_ERROR,
++						"Can't compile custom effect; neither $HOME nor $XDG_CONFIG_HOME "
++						"is defined.");
++				return NULL;
++			}
++
++			cachepath = malloc(strlen(homedir) + strlen("/.cache/swaylock") + 1);
++			cachelen = sprintf(cachepath, "%s/.cache/swaylock", homedir);
++		}
++
++		if (mkdir(cachepath, 0777) < 0 && errno != EEXIST) {
++			swaylock_log(LOG_ERROR,
++					"Can't compile custom effect; mkdir %s failed: %s\n",
++					cachepath, strerror(errno));
++			free(cachepath);
++			cachepath = NULL;
++			return NULL;
++		}
++	}
++
++	// Find the true, absolute path of the input file
++	char *abspath = realpath(path, NULL);
++	size_t abspathlen = strlen(abspath);
++
++	char *outpath = malloc(cachelen + 1 + abspathlen + 3 + 1);
++	size_t outlen = sprintf(outpath, "%s/%s.so", cachepath, abspath);
++
++	// Sanitize
++	for (char *ch = outpath + cachelen + 1; ch < outpath + cachelen + 1 + abspathlen; ++ch) {
++		if (!(
++				(*ch >= 'a' && *ch <= 'z') ||
++				(*ch >= 'A' && *ch <= 'Z') ||
++				(*ch >= '0' && *ch <= '9') ||
++				(*ch == '.'))) {
++			*ch = '_';
++		}
++	}
++
++	if (!file_is_outdated(path, outpath)) {
++		free(abspath);
++		return outpath;
++	}
++
++	static const char *fmt = "cc -shared -g -O2 -march=native -fopenmp -o '%s' '%s' -lm";
++	char *cmd = malloc(strlen(fmt) + outlen - 2 + abspathlen - 2 + 1);
++	sprintf(cmd, fmt, outpath, abspath);
++	free(abspath);
++	fprintf(stderr, "Compiling custom effect: %s\n", cmd);
++
++	// Finally, compile.
++	int ret = system(cmd);
++	free(cmd);
++	if (ret != 0) {
++		if (ret == -1) {
++			swaylock_log(LOG_ERROR, "Custom effect: system(): %s", strerror(errno));
++			free(outpath);
++			return NULL;
++		} else {
++			swaylock_log(LOG_ERROR, "Custom effect compilation failed\n");
++			free(outpath);
++			return NULL;
++		}
++	}
++
++	return outpath;
++}
++
++static void effect_custom(uint32_t *data, int width, int height, int scale,
++		char *path) {
++	size_t pathlen = strlen(path);
++	if (pathlen > 3 && strcmp(path + pathlen - 3, ".so") == 0) {
++		effect_custom_run(data, width, height, scale, path);
++	} else if (pathlen > 2 && strcmp(path + pathlen - 2, ".c") == 0) {
++		char *compiled = effect_custom_compile(path);
++		if (compiled != NULL) {
++			effect_custom_run(data, width, height, scale, compiled);
++			free(compiled);
++		}
++	} else {
++		swaylock_log(
++			LOG_ERROR, "%s: Unknown file type for custom effect (expected .c or .so)",
++			path);
++	}
++}
++
++static cairo_surface_t *run_effect(cairo_surface_t *surface, int scale,
++		struct swaylock_effect *effect) {
++	switch (effect->tag) {
++	case EFFECT_BLUR: {
++		cairo_surface_t *surf = cairo_image_surface_create(
++				CAIRO_FORMAT_RGB24,
++				cairo_image_surface_get_width(surface),
++				cairo_image_surface_get_height(surface));
++
++		if (cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
++			swaylock_log(LOG_ERROR, "Failed to create surface for blur effect");
++			cairo_surface_destroy(surf);
++			break;
++		}
++
++		effect_blur(
++				(uint32_t *)cairo_image_surface_get_data(surf),
++				(uint32_t *)cairo_image_surface_get_data(surface),
++				cairo_image_surface_get_width(surface),
++				cairo_image_surface_get_height(surface),
++				scale,
++				effect->e.blur.radius, effect->e.blur.times);
++		cairo_surface_flush(surf);
++		cairo_surface_destroy(surface);
++		surface = surf;
++		break;
++	}
++
++	case EFFECT_PIXELATE: {
++		effect_pixelate(
++				(uint32_t *)cairo_image_surface_get_data(surface),
++				cairo_image_surface_get_width(surface),
++				cairo_image_surface_get_height(surface),
++				scale,
++				effect->e.pixelate.factor);
++		cairo_surface_flush(surface);
++		break;
++	}
++
++	case EFFECT_SCALE: {
++		cairo_surface_t *surf = cairo_image_surface_create(
++				CAIRO_FORMAT_RGB24,
++				cairo_image_surface_get_width(surface) * effect->e.scale,
++				cairo_image_surface_get_height(surface) * effect->e.scale);
++
++		if (cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
++			swaylock_log(LOG_ERROR, "Failed to create surface for scale effect");
++			cairo_surface_destroy(surf);
++			break;
++		}
++
++		effect_scale(
++				(uint32_t *)cairo_image_surface_get_data(surf),
++				(uint32_t *)cairo_image_surface_get_data(surface),
++				cairo_image_surface_get_width(surface),
++				cairo_image_surface_get_height(surface),
++				effect->e.scale);
++		cairo_surface_flush(surf);
++		cairo_surface_destroy(surface);
++		surface = surf;
++		break;
++	}
++
++	case EFFECT_GREYSCALE: {
++		effect_greyscale(
++				(uint32_t *)cairo_image_surface_get_data(surface),
++				cairo_image_surface_get_width(surface),
++				cairo_image_surface_get_height(surface));
++		cairo_surface_flush(surface);
++		break;
++	}
++
++	case EFFECT_VIGNETTE: {
++		effect_vignette(
++				(uint32_t *)cairo_image_surface_get_data(surface),
++				cairo_image_surface_get_width(surface),
++				cairo_image_surface_get_height(surface),
++				effect->e.vignette.base,
++				effect->e.vignette.factor);
++		cairo_surface_flush(surface);
++		break;
++	}
++
++	case EFFECT_COMPOSE: {
++		effect_compose(
++				(uint32_t *)cairo_image_surface_get_data(surface),
++				cairo_image_surface_get_width(surface),
++				cairo_image_surface_get_height(surface),
++				scale,
++				effect->e.compose.x, effect->e.compose.y,
++				effect->e.compose.w, effect->e.compose.h,
++				effect->e.compose.gravity, effect->e.compose.imgpath);
++		cairo_surface_flush(surface);
++		break;
++	}
++
++	case EFFECT_CUSTOM: {
++		effect_custom(
++				(uint32_t *)cairo_image_surface_get_data(surface),
++				cairo_image_surface_get_width(surface),
++				cairo_image_surface_get_height(surface),
++				scale,
++				effect->e.custom);
++		cairo_surface_flush(surface);
++		break;
++	} }
++
++	return surface;
++}
++
++static cairo_surface_t *ensure_format(cairo_surface_t *surface) {
++	if (cairo_image_surface_get_format(surface) == CAIRO_FORMAT_RGB24) {
++		return surface;
++	}
++
++	swaylock_log(LOG_DEBUG, "Have to convert surface to CAIRO_FORMAT_RGB24 from %i.",
++			(int)cairo_image_surface_get_format(surface));
++
++	cairo_surface_t *surf = cairo_image_surface_create(
++			CAIRO_FORMAT_RGB24,
++			cairo_image_surface_get_width(surface),
++			cairo_image_surface_get_height(surface));
++	if (cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
++		swaylock_log(LOG_ERROR, "Failed to create surface for scale effect");
++		cairo_surface_destroy(surf);
++		return NULL;
++	}
++
++	memcpy(
++			cairo_image_surface_get_data(surf),
++			cairo_image_surface_get_data(surface),
++			cairo_image_surface_get_stride(surface) * cairo_image_surface_get_height(surface));
++	cairo_surface_destroy(surface);
++	return surf;
++}
++
++cairo_surface_t *swaylock_effects_run(cairo_surface_t *surface, int scale,
++		struct swaylock_effect *effects, int count) {
++	surface = ensure_format(surface);
++	if (surface == NULL) return NULL;
++
++	for (int i = 0; i < count; ++i) {
++		struct swaylock_effect *effect = &effects[i];
++		surface = run_effect(surface, scale, effect);
++	}
++
++	return surface;
++}
++
++#define TIME_MSEC(tv) ((tv).tv_sec * 1000.0 + (tv).tv_nsec / 1000000.0)
++#define TIME_DELTA(first, last) (TIME_MSEC(last) - TIME_MSEC(first))
++
++cairo_surface_t *swaylock_effects_run_timed(cairo_surface_t *surface, int scale,
++		struct swaylock_effect *effects, int count) {
++	struct timespec start_tv;
++	clock_gettime(CLOCK_MONOTONIC, &start_tv);
++
++	surface = ensure_format(surface);
++	if (surface == NULL) return NULL;
++
++	fprintf(stderr, "Running %i effects:\n", count);
++	for (int i = 0; i < count; ++i) {
++		struct timespec effect_start_tv;
++		clock_gettime(CLOCK_MONOTONIC, &effect_start_tv);
++
++		struct swaylock_effect *effect = &effects[i];
++		surface = run_effect(surface, scale, effect);
++
++		struct timespec effect_end_tv;
++		clock_gettime(CLOCK_MONOTONIC, &effect_end_tv);
++		fprintf(stderr, "    %s: %fms\n", effect_name(effect),
++				TIME_DELTA(effect_start_tv, effect_end_tv));
++	}
++
++	struct timespec end_tv;
++	clock_gettime(CLOCK_MONOTONIC, &end_tv);
++	fprintf(stderr, "Effects took %fms.\n", TIME_DELTA(start_tv, end_tv));
++
++	return surface;
++}
+diff -urN swaylock-1.5/fade.c swaylock-effects/fade.c
+--- swaylock-1.5/fade.c	1970-01-01 01:00:00.000000000 +0100
++++ swaylock-effects/fade.c	2022-01-29 23:27:40.716097181 +0100
+@@ -0,0 +1,128 @@
++#include "fade.h"
++#include "pool-buffer.h"
++#include "swaylock.h"
++#include <stdlib.h>
++#include <stdio.h>
++#include <omp.h>
++#include <stdalign.h>
++#include <string.h>
++
++#ifdef FADE_PROFILE
++#include <time.h>
++double get_time() {
++	struct timespec tv;
++	clock_gettime(CLOCK_MONOTONIC, &tv);
++	return tv.tv_sec + (tv.tv_nsec / 1000000000.0);
++}
++#endif
++
++#if defined(USE_SSE) && defined(__SSE2__)
++#define set_alpha set_alpha_sse
++
++#include <immintrin.h>
++
++static void set_alpha_sse(uint32_t *orig, struct pool_buffer *buf, float alpha) {
++	int alpha_factor = (int)(alpha * (1 << 16));
++	if (alpha_factor != 0)
++		alpha_factor -= 1;
++
++	__m128i alpha_vec = _mm_set_epi16(
++			alpha_factor, alpha_factor, alpha_factor, alpha_factor,
++			alpha_factor, alpha_factor, alpha_factor, alpha_factor);
++	__m128i dummy_vec = _mm_set_epi16(0, 0, 0, 0, 0, 0, 0, 0);
++
++	uint8_t *orig_bytes = (uint8_t *)orig;
++	uint8_t *dest_bytes = (uint8_t *)buf->data;
++	size_t length = ((size_t)buf->width * (size_t)buf->height * 4) / 8;
++
++	for (size_t i = 0; i < length; ++i) {
++		size_t index = i * 8;
++
++		// Read data into SSE register, where each byte is an u16
++		__m128i argb_vec = _mm_loadu_si64(orig_bytes + index);
++		argb_vec = _mm_unpacklo_epi8(argb_vec, dummy_vec);
++
++		// Multiply the 8 argb u16s with the 8 alpha u16s
++		argb_vec = _mm_mulhi_epu16(argb_vec, alpha_vec);
++
++		// Put the low bytes of each argb u16 into the destination buffer
++		argb_vec = _mm_packus_epi16(argb_vec, dummy_vec);
++		_mm_storeu_si64(dest_bytes + index, argb_vec);
++	}
++}
++
++#else
++#define set_alpha set_alpha_slow
++
++static void set_alpha_slow(uint32_t *orig, struct pool_buffer *buf, float alpha) {
++	for (size_t y = 0; y < buf->height; ++y) {
++		for (size_t x = 0; x < buf->width; ++x) {
++			size_t index = y * buf->width + x;
++			uint32_t srcpix = orig[index];
++			int srcr = (srcpix & 0x00ff0000u) >> 16;
++			int srcg = (srcpix & 0x0000ff00u) >> 8;
++			int srcb = (srcpix & 0x000000ffu);
++
++			((uint32_t *)buf->data)[index] = 0 |
++				(uint32_t)(alpha * 255) << 24 |
++				(uint32_t)(srcr * alpha) << 16 |
++				(uint32_t)(srcg * alpha) << 8 |
++				(uint32_t)(srcb * alpha);
++		}
++	}
++}
++
++#endif
++
++void fade_prepare(struct swaylock_fade *fade, struct pool_buffer *buffer) {
++	if (!fade->target_time) {
++		fade->original_buffer = NULL;
++		return;
++	}
++
++	size_t size = (size_t)buffer->width * (size_t)buffer->height * 4;
++	fade->original_buffer = malloc(size);
++	memcpy(fade->original_buffer, buffer->data, size);
++
++	set_alpha(fade->original_buffer, buffer, 0);
++}
++
++void fade_update(struct swaylock_fade *fade, struct pool_buffer *buffer, uint32_t time) {
++	if (fade->current_time >= fade->target_time) {
++		return;
++	}
++
++	double delta = 0;
++	if (fade->old_time != 0) {
++		delta = time - fade->old_time;
++	}
++	fade->old_time = time;
++
++	fade->current_time += delta;
++	if (fade->current_time > fade->target_time) {
++		fade->current_time = fade->target_time;
++	}
++
++	double alpha = (double)fade->current_time / (double)fade->target_time;
++
++#ifdef FADE_PROFILE
++	double before = get_time();
++#endif
++
++	set_alpha(fade->original_buffer, buffer, alpha);
++
++#ifdef FADE_PROFILE
++	double after = get_time();
++	printf("set alpha in %fms (%fFPS). %fms since last time, FPS: %f\n",
++			(after - before) * 1000, 1 / (after - before),
++			delta, 1000 / delta);
++#endif
++}
++
++bool fade_is_complete(struct swaylock_fade *fade) {
++	return fade->target_time == 0 || fade->current_time >= fade->target_time;
++}
++
++void fade_destroy(struct swaylock_fade *fade) {
++	free(fade->original_buffer);
++}
+diff -urN swaylock-1.5/.git/config swaylock-effects/.git/config
+diff -urN swaylock-1.5/.git/description swaylock-effects/.git/description
+diff -urN swaylock-1.5/.git/FETCH_HEAD swaylock-effects/.git/FETCH_HEAD
+diff -urN swaylock-1.5/.git/HEAD swaylock-effects/.git/HEAD
+diff -urN swaylock-1.5/.git/hooks/applypatch-msg.sample swaylock-effects/.git/hooks/applypatch-msg.sample
+diff -urN swaylock-1.5/.git/hooks/commit-msg.sample swaylock-effects/.git/hooks/commit-msg.sample
+diff -urN swaylock-1.5/.git/hooks/fsmonitor-watchman.sample swaylock-effects/.git/hooks/fsmonitor-watchman.sample
+diff -urN swaylock-1.5/.git/hooks/post-update.sample swaylock-effects/.git/hooks/post-update.sample
+diff -urN swaylock-1.5/.git/hooks/pre-applypatch.sample swaylock-effects/.git/hooks/pre-applypatch.sample
+diff -urN swaylock-1.5/.git/hooks/pre-commit.sample swaylock-effects/.git/hooks/pre-commit.sample
+diff -urN swaylock-1.5/.git/hooks/pre-merge-commit.sample swaylock-effects/.git/hooks/pre-merge-commit.sample
+diff -urN swaylock-1.5/.git/hooks/prepare-commit-msg.sample swaylock-effects/.git/hooks/prepare-commit-msg.sample
+diff -urN swaylock-1.5/.git/hooks/pre-push.sample swaylock-effects/.git/hooks/pre-push.sample
+diff -urN swaylock-1.5/.git/hooks/pre-rebase.sample swaylock-effects/.git/hooks/pre-rebase.sample
+diff -urN swaylock-1.5/.git/hooks/pre-receive.sample swaylock-effects/.git/hooks/pre-receive.sample
+diff -urN swaylock-1.5/.git/hooks/push-to-checkout.sample swaylock-effects/.git/hooks/push-to-checkout.sample
+diff -urN swaylock-1.5/.git/hooks/update.sample swaylock-effects/.git/hooks/update.sample
+Binary files swaylock-1.5/.git/index and swaylock-effects/.git/index differ
+diff -urN swaylock-1.5/.git/info/exclude swaylock-effects/.git/info/exclude
+diff -urN swaylock-1.5/.git/logs/HEAD swaylock-effects/.git/logs/HEAD
+diff -urN swaylock-1.5/.git/logs/refs/heads/master swaylock-effects/.git/logs/refs/heads/master
+diff -urN swaylock-1.5/.git/logs/refs/remotes/origin/HEAD swaylock-effects/.git/logs/refs/remotes/origin/HEAD
+Binary files swaylock-1.5/.git/objects/pack/pack-421bdc973ff28ec91d3c7da14aecf86c6d6cec12.idx and swaylock-effects/.git/objects/pack/pack-421bdc973ff28ec91d3c7da14aecf86c6d6cec12.idx differ
+Binary files swaylock-1.5/.git/objects/pack/pack-421bdc973ff28ec91d3c7da14aecf86c6d6cec12.pack and swaylock-effects/.git/objects/pack/pack-421bdc973ff28ec91d3c7da14aecf86c6d6cec12.pack differ
+diff -urN swaylock-1.5/.git/ORIG_HEAD swaylock-effects/.git/ORIG_HEAD
+diff -urN swaylock-1.5/.git/packed-refs swaylock-effects/.git/packed-refs
+diff -urN swaylock-1.5/.git/refs/heads/master swaylock-effects/.git/refs/heads/master
+diff -urN swaylock-1.5/.git/refs/remotes/origin/HEAD swaylock-effects/.git/refs/remotes/origin/HEAD
+diff -urN swaylock-1.5/include/background-image.h swaylock-effects/include/background-image.h
+--- swaylock-1.5/include/background-image.h	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/include/background-image.h	2022-01-29 23:27:40.716097181 +0100
+@@ -1,5 +1,6 @@
+ #ifndef _SWAY_BACKGROUND_IMAGE_H
+ #define _SWAY_BACKGROUND_IMAGE_H
++#include <wayland-client.h>
+ #include "cairo.h"
+ 
+ enum background_mode {
+@@ -12,8 +13,12 @@
+ 	BACKGROUND_MODE_INVALID,
+ };
+ 
++struct swaylock_surface;
++
+ enum background_mode parse_background_mode(const char *mode);
+ cairo_surface_t *load_background_image(const char *path);
++cairo_surface_t *load_background_from_buffer(void *buf, uint32_t format,
++		uint32_t width, uint32_t height, uint32_t stride, enum wl_output_transform transform);
+ void render_background_image(cairo_t *cairo, cairo_surface_t *image,
+ 		enum background_mode mode, int buffer_width, int buffer_height);
+ 
+diff -urN swaylock-1.5/include/effects.h swaylock-effects/include/effects.h
+--- swaylock-1.5/include/effects.h	1970-01-01 01:00:00.000000000 +0100
++++ swaylock-effects/include/effects.h	2022-01-29 23:27:40.716097181 +0100
+@@ -0,0 +1,64 @@
++#ifndef _SWAYLOCK_EFFECTS_H
++#define _SWAYLOCK_EFFECTS_H
++
++#include <stdbool.h>
++
++#include "cairo.h"
++
++struct swaylock_effect_screen_pos {
++	float pos;
++	bool is_percent;
++};
++
++struct swaylock_effect {
++	union {
++		struct {
++			int radius, times;
++		} blur;
++		struct {
++			int factor;
++		} pixelate;
++		double scale;
++		struct {
++			double base;
++			double factor;
++		} vignette;
++		struct {
++			struct swaylock_effect_screen_pos x;
++			struct swaylock_effect_screen_pos y;
++			struct swaylock_effect_screen_pos w;
++			struct swaylock_effect_screen_pos h;
++			enum {
++				EFFECT_COMPOSE_GRAV_CENTER,
++				EFFECT_COMPOSE_GRAV_NW,
++				EFFECT_COMPOSE_GRAV_NE,
++				EFFECT_COMPOSE_GRAV_SW,
++				EFFECT_COMPOSE_GRAV_SE,
++				EFFECT_COMPOSE_GRAV_N,
++				EFFECT_COMPOSE_GRAV_S,
++				EFFECT_COMPOSE_GRAV_E,
++				EFFECT_COMPOSE_GRAV_W,
++			} gravity;
++			char *imgpath;
++		} compose;
++		char *custom;
++	} e;
++
++	enum {
++		EFFECT_BLUR,
++		EFFECT_PIXELATE,
++		EFFECT_SCALE,
++		EFFECT_GREYSCALE,
++		EFFECT_VIGNETTE,
++		EFFECT_COMPOSE,
++		EFFECT_CUSTOM,
++	} tag;
++};
++
++cairo_surface_t *swaylock_effects_run(cairo_surface_t *surface, int scale,
++		struct swaylock_effect *effects, int count);
++
++cairo_surface_t *swaylock_effects_run_timed(cairo_surface_t *surface, int scale,
++		struct swaylock_effect *effects, int count);
++
++#endif
+diff -urN swaylock-1.5/include/fade.h swaylock-effects/include/fade.h
+--- swaylock-1.5/include/fade.h	1970-01-01 01:00:00.000000000 +0100
++++ swaylock-effects/include/fade.h	2022-01-29 23:27:40.716097181 +0100
+@@ -0,0 +1,21 @@
++#ifndef _SWAYLOCK_FADE_H
++#define _SWAYLOCK_FADE_H
++
++#include <stdbool.h>
++#include <stdint.h>
++
++struct pool_buffer;
++
++struct swaylock_fade {
++	float current_time;
++	float target_time;
++	uint32_t old_time;
++	uint32_t *original_buffer;
++};
++
++void fade_prepare(struct swaylock_fade *fade, struct pool_buffer *buffer);
++void fade_update(struct swaylock_fade *fade, struct pool_buffer *buffer, uint32_t time);
++bool fade_is_complete(struct swaylock_fade *fade);
++void fade_destroy(struct swaylock_fade *fade);
++
++#endif
+diff -urN swaylock-1.5/include/log.h swaylock-effects/include/log.h
+--- swaylock-1.5/include/log.h	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/include/log.h	2022-01-29 23:27:40.716097181 +0100
+@@ -10,6 +10,7 @@
+ 	LOG_ERROR = 1,
+ 	LOG_INFO = 2,
+ 	LOG_DEBUG = 3,
++	LOG_TRACE = 4,
+ 	LOG_IMPORTANCE_LAST,
+ };
+ 
+@@ -24,6 +25,8 @@
+ void _swaylock_log(enum log_importance verbosity, const char *format, ...)
+ 	_ATTRIB_PRINTF(2, 3);
+ 
++void _swaylock_trace(const char *file, int line, const char *func);
++
+ const char *_swaylock_strip_path(const char *filepath);
+ 
+ #define swaylock_log(verb, fmt, ...) \
+@@ -33,4 +36,7 @@
+ #define swaylock_log_errno(verb, fmt, ...) \
+ 	swaylock_log(verb, fmt ": %s", ##__VA_ARGS__, strerror(errno))
+ 
++#define swaylock_trace() \
++	_swaylock_trace(__FILE__, __LINE__, __func__)
++
+ #endif
+diff -urN swaylock-1.5/include/seat.h swaylock-effects/include/seat.h
+--- swaylock-1.5/include/seat.h	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/include/seat.h	2022-01-29 23:27:40.716097181 +0100
+@@ -1,6 +1,11 @@
+ #ifndef _SWAYLOCK_SEAT_H
+ #define _SWAYLOCK_SEAT_H
+ #include <xkbcommon/xkbcommon.h>
++#include <stdint.h>
++#include <stdbool.h>
++
++struct loop;
++struct loop_timer;
+ 
+ struct swaylock_xkb {
+ 	bool caps_lock;
+@@ -14,6 +19,12 @@
+ 	struct swaylock_state *state;
+ 	struct wl_pointer *pointer;
+ 	struct wl_keyboard *keyboard;
++	struct wl_touch *touch;
++	int32_t repeat_period_ms;
++	int32_t repeat_delay_ms;
++	uint32_t repeat_sym;
++	uint32_t repeat_codepoint;
++	struct loop_timer *repeat_timer;
+ };
+ 
+ extern const struct wl_seat_listener seat_listener;
+diff -urN swaylock-1.5/include/swaylock.h swaylock-effects/include/swaylock.h
+--- swaylock-1.5/include/swaylock.h	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/include/swaylock.h	2022-01-29 23:27:40.716097181 +0100
+@@ -7,6 +7,8 @@
+ #include "cairo.h"
+ #include "pool-buffer.h"
+ #include "seat.h"
++#include "effects.h"
++#include "fade.h"
+ #include "wlr-layer-shell-unstable-v1-client-protocol.h"
+ 
+ enum auth_state {
+@@ -17,6 +19,7 @@
+ 	AUTH_STATE_BACKSPACE,
+ 	AUTH_STATE_VALIDATING,
+ 	AUTH_STATE_INVALID,
++	AUTH_STATE_GRACE,
+ };
+ 
+ struct swaylock_colorset {
+@@ -63,6 +66,20 @@
+ 	bool show_failed_attempts;
+ 	bool daemonize;
+ 	bool indicator_idle_visible;
++
++	bool screenshots;
++	struct swaylock_effect *effects;
++	int effects_count;
++	bool time_effects;
++	bool indicator;
++	bool clock;
++	char *timestr;
++	char *datestr;
++	uint32_t fade_in;
++	bool password_submit_on_touch;
++	uint32_t password_grace_period;
++	bool password_grace_no_mouse;
++	bool password_grace_no_touch;
+ };
+ 
+ struct swaylock_password {
+@@ -79,6 +96,7 @@
+ 	struct wl_subcompositor *subcompositor;
+ 	struct zwlr_layer_shell_v1 *layer_shell;
+ 	struct zwlr_input_inhibit_manager_v1 *input_inhibit_manager;
++	struct zwlr_screencopy_manager_v1 *screencopy_manager;
+ 	struct wl_shm *shm;
+ 	struct wl_list surfaces;
+ 	struct wl_list images;
+@@ -86,13 +104,22 @@
+ 	struct swaylock_password password;
+ 	struct swaylock_xkb xkb;
+ 	enum auth_state auth_state;
++	bool indicator_dirty;
++	int render_randnum;
+ 	int failed_attempts;
++	size_t n_screenshots_done;
+ 	bool run_display;
+ 	struct zxdg_output_manager_v1 *zxdg_output_manager;
+ };
+ 
+ struct swaylock_surface {
+ 	cairo_surface_t *image;
++	struct {
++		uint32_t format, width, height, stride;
++		enum wl_output_transform transform;
++		void *data;
++		struct swaylock_image *image;
++	} screencopy;
+ 	struct swaylock_state *state;
+ 	struct wl_output *output;
+ 	uint32_t output_global_name;
+@@ -101,14 +128,19 @@
+ 	struct wl_surface *child; // surface made into subsurface
+ 	struct wl_subsurface *subsurface;
+ 	struct zwlr_layer_surface_v1 *layer_surface;
++	struct zwlr_screencopy_frame_v1 *screencopy_frame;
+ 	struct pool_buffer buffers[2];
+ 	struct pool_buffer indicator_buffers[2];
+ 	struct pool_buffer *current_buffer;
++	struct swaylock_fade fade;
++	int events_pending;
++	bool configured;
+ 	bool frame_pending, dirty;
+ 	uint32_t width, height;
+ 	uint32_t indicator_width, indicator_height;
+ 	int32_t scale;
+ 	enum wl_output_subpixel subpixel;
++	enum wl_output_transform transform;
+ 	char *output_name;
+ 	struct wl_list link;
+ };
+@@ -123,7 +155,11 @@
+ 
+ void swaylock_handle_key(struct swaylock_state *state,
+ 		xkb_keysym_t keysym, uint32_t codepoint);
++void swaylock_handle_mouse(struct swaylock_state *state);
++void swaylock_handle_touch(struct swaylock_state *state);
+ void render_frame_background(struct swaylock_surface *surface);
++void render_background_fade(struct swaylock_surface *surface, uint32_t time);
++void render_background_fade_prepare(struct swaylock_surface *surface, struct pool_buffer *buffer);
+ void render_frame(struct swaylock_surface *surface);
+ void render_frames(struct swaylock_state *state);
+ void damage_surface(struct swaylock_surface *surface);
+diff -urN swaylock-1.5/log.c swaylock-effects/log.c
+--- swaylock-1.5/log.c	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/log.c	2022-01-29 23:27:40.716097181 +0100
+@@ -15,6 +15,7 @@
+ 	[LOG_ERROR ] = "\x1B[1;31m",
+ 	[LOG_INFO  ] = "\x1B[1;34m",
+ 	[LOG_DEBUG ] = "\x1B[1;30m",
++	[LOG_TRACE ] = "\x1B[1;32m",
+ };
+ 
+ void swaylock_log_init(enum log_importance verbosity) {
+@@ -58,6 +59,17 @@
+ 	va_end(args);
+ }
+ 
++// This is mainly here for performance.
++// Don't want to do _swaylock_strip_path every event if we're not tracing.
++void _swaylock_trace(const char *file, int line, const char *func) {
++	if (LOG_TRACE > log_importance) {
++		return;
++	}
++
++	_swaylock_log(LOG_TRACE, "[%s:%d]: trace: %s",
++			_swaylock_strip_path(file), line, func);
++}
++
+ const char *_swaylock_strip_path(const char *filepath) {
+ 	if (*filepath == '.') {
+ 		while (*filepath == '.' || *filepath == '/') {
+@@ -65,4 +77,4 @@
+ 		}
+ 	}
+ 	return filepath;
+-}
++ }
+diff -urN swaylock-1.5/loop.c swaylock-effects/loop.c
+--- swaylock-1.5/loop.c	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/loop.c	2022-01-29 23:27:40.720097161 +0100
+@@ -21,6 +21,7 @@
+ 	void (*callback)(void *data);
+ 	void *data;
+ 	struct timespec expiry;
++	bool removed;
+ 	struct wl_list link; // struct loop_timer::link
+ };
+ 
+@@ -80,7 +81,11 @@
+ 		ms = 0;
+ 	}
+ 
+-	poll(loop->fds, loop->fd_length, ms);
++	int ret = poll(loop->fds, loop->fd_length, ms);
++	if (ret < 0) {
++		swaylock_log_errno(LOG_ERROR, "poll failed");
++		exit(1);
++	}
+ 
+ 	// Dispatch fds
+ 	size_t fd_index = 0;
+@@ -104,12 +109,19 @@
+ 		clock_gettime(CLOCK_MONOTONIC, &now);
+ 		struct loop_timer *timer = NULL, *tmp_timer = NULL;
+ 		wl_list_for_each_safe(timer, tmp_timer, &loop->timers, link) {
++			if (timer->removed) {
++				wl_list_remove(&timer->link);
++				free(timer);
++				continue;
++			}
++
+ 			bool expired = timer->expiry.tv_sec < now.tv_sec ||
+ 				(timer->expiry.tv_sec == now.tv_sec &&
+ 				 timer->expiry.tv_nsec < now.tv_nsec);
+ 			if (expired) {
+ 				timer->callback(timer->data);
+-				loop_remove_timer(loop, timer);
++				wl_list_remove(&timer->link);
++				free(timer);
+ 			}
+ 		}
+ 	}
+@@ -184,8 +196,7 @@
+ 	struct loop_timer *timer = NULL, *tmp_timer = NULL;
+ 	wl_list_for_each_safe(timer, tmp_timer, &loop->timers, link) {
+ 		if (timer == remove) {
+-			wl_list_remove(&timer->link);
+-			free(timer);
++			timer->removed = true;
+ 			return true;
+ 		}
+ 	}
+diff -urN swaylock-1.5/main.c swaylock-effects/main.c
+--- swaylock-1.5/main.c	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/main.c	2022-01-29 23:27:40.720097161 +0100
+@@ -25,8 +25,30 @@
+ #include "swaylock.h"
+ #include "wlr-input-inhibitor-unstable-v1-client-protocol.h"
+ #include "wlr-layer-shell-unstable-v1-client-protocol.h"
++#include "wlr-screencopy-unstable-v1-client-protocol.h"
+ #include "xdg-output-unstable-v1-client-protocol.h"
+ 
++// returns a positive integer in milliseconds
++static uint32_t parse_seconds(const char *seconds) {
++	char *endptr;
++	errno = 0;
++	float val = strtof(seconds, &endptr);
++	if (errno != 0) {
++		swaylock_log(LOG_DEBUG, "Invalid number for seconds %s, defaulting to 0", seconds);
++		return 0;
++	}
++	if (endptr == seconds) {
++		swaylock_log(LOG_DEBUG, "No digits were found in %s, defaulting to 0", seconds);
++		return 0;
++	}
++	if (val < 0) {
++		swaylock_log(LOG_DEBUG, "Negative seconds not allowed for %s, defaulting to 0", seconds);
++		return 0;
++	}
++
++	return (uint32_t)floor(val * 1000);
++}
++
+ static uint32_t parse_color(const char *color) {
+ 	if (color[0] == '#') {
+ 		++color;
+@@ -45,6 +67,118 @@
+ 	return res;
+ }
+ 
++static const char *parse_screen_pos(const char *str, struct swaylock_effect_screen_pos *pos) {
++	char *eptr;
++	float res = strtof(str, &eptr);
++	if (eptr == str)
++		return NULL;
++
++	pos->pos = res;
++	if (eptr[0] == '%') {
++		pos->is_percent = true;
++		return eptr + 1;
++	} else {
++		pos->is_percent = false;
++		return eptr;
++	}
++}
++
++static const char *parse_screen_pos_pair(const char *str, char delim,
++		struct swaylock_effect_screen_pos *pos1,
++		struct swaylock_effect_screen_pos *pos2) {
++	struct swaylock_effect_screen_pos tpos1, tpos2;
++	str = parse_screen_pos(str, &tpos1);
++	if (str == NULL || str[0] != delim)
++		return NULL;
++
++	str = parse_screen_pos(str + 1, &tpos2);
++	if (str == NULL)
++		return NULL;
++
++	pos1->pos = tpos1.pos;
++	pos1->is_percent = tpos1.is_percent;
++	pos2->pos = tpos2.pos;
++	pos2->is_percent = tpos2.is_percent;
++	return str;
++}
++
++static const char *parse_constant(const char *str1, const char *str2) {
++	size_t len = strlen(str2); 
++	if (strncmp(str1, str2, len) == 0) {
++		return str1 + len;
++	} else {
++		return NULL;
++	}
++}
++
++static int parse_gravity_from_xy(float x, float y) {
++	if (x >= 0 && y >= 0)
++		return EFFECT_COMPOSE_GRAV_NW;
++	else if (x >= 0 && y < 0)
++		return EFFECT_COMPOSE_GRAV_SW;
++	else if (x < 0 && y >= 0)
++		return EFFECT_COMPOSE_GRAV_NE;
++	else
++		return EFFECT_COMPOSE_GRAV_SE;
++}
++
++static void parse_effect_compose(const char *str, struct swaylock_effect *effect) {
++	effect->e.compose.x = effect->e.compose.y = (struct swaylock_effect_screen_pos) { 50, 1 }; // 50%
++	effect->e.compose.w = effect->e.compose.h = (struct swaylock_effect_screen_pos) { -1, 0 }; // -1
++	effect->e.compose.gravity = EFFECT_COMPOSE_GRAV_CENTER;
++	effect->e.compose.imgpath = NULL;
++
++	// Parse position if they exist
++	const char *s = parse_screen_pos_pair(str, ',', &effect->e.compose.x, &effect->e.compose.y);
++	if (s == NULL) {
++		s = str;
++	} else {
++		// If we're given an x/y position, determine gravity automatically
++		// from whether x and y is positive or not
++		effect->e.compose.gravity = parse_gravity_from_xy(
++				effect->e.compose.x.pos, effect->e.compose.y.pos);
++		s += 1;
++		str = s;
++	}
++
++	// Parse dimensions if they exist
++	s = parse_screen_pos_pair(str, 'x', &effect->e.compose.w, &effect->e.compose.h);
++	if (s == NULL) {
++		s = str;
++	} else {
++		s += 1;
++		str = s;
++	}
++
++	// Parse gravity if it exists
++	if ((s = parse_constant(str, "center;")) != NULL)
++		effect->e.compose.gravity = EFFECT_COMPOSE_GRAV_CENTER;
++	else if ((s = parse_constant(str, "northwest;")) != NULL)
++		effect->e.compose.gravity = EFFECT_COMPOSE_GRAV_NW;
++	else if ((s = parse_constant(str, "northeast;")) != NULL)
++		effect->e.compose.gravity = EFFECT_COMPOSE_GRAV_NE;
++	else if ((s = parse_constant(str, "southwest;")) != NULL)
++		effect->e.compose.gravity = EFFECT_COMPOSE_GRAV_SW;
++	else if ((s = parse_constant(str, "southeast;")) != NULL)
++		effect->e.compose.gravity = EFFECT_COMPOSE_GRAV_SE;
++	else if ((s = parse_constant(str, "north;")) != NULL)
++		effect->e.compose.gravity = EFFECT_COMPOSE_GRAV_N;
++	else if ((s = parse_constant(str, "south;")) != NULL)
++		effect->e.compose.gravity = EFFECT_COMPOSE_GRAV_S;
++	else if ((s = parse_constant(str, "east;")) != NULL)
++		effect->e.compose.gravity = EFFECT_COMPOSE_GRAV_E;
++	else if ((s = parse_constant(str, "west;")) != NULL)
++		effect->e.compose.gravity = EFFECT_COMPOSE_GRAV_W;
++	if (s == NULL) {
++		s = str;
++	} else {
++		str = s;
++	}
++
++	// The rest is the file name
++	effect->e.compose.imgpath = strdup(str);
++}
++
+ int lenient_strcmp(char *a, char *b) {
+ 	if (a == b) {
+ 		return 0;
+@@ -57,7 +191,8 @@
+ 	}
+ }
+ 
+-static void daemonize(void) {
++static int daemonize_start() {
++	swaylock_trace();
+ 	int fds[2];
+ 	if (pipe(fds) != 0) {
+ 		swaylock_log(LOG_ERROR, "Failed to pipe");
+@@ -75,11 +210,7 @@
+ 			write(fds[1], &success, 1);
+ 			exit(1);
+ 		}
+-		success = 1;
+-		if (write(fds[1], &success, 1) != 1) {
+-			exit(1);
+-		}
+-		close(fds[1]);
++		return fds[1];
+ 	} else {
+ 		close(fds[1]);
+ 		uint8_t success;
+@@ -92,7 +223,25 @@
+ 	}
+ }
+ 
++static void daemonize_done(void *fdptr) {
++	swaylock_trace();
++	int *fd = (int *)fdptr;
++	if (*fd < 0) {
++		return;
++	}
++
++	uint8_t success = 1;
++	if (write(*fd, &success, 1) != 1) {
++		swaylock_log(LOG_ERROR, "Failed to tell parent process that daemonization is done");
++		exit(1);
++	}
++	close(*fd);
++	*fd = -1;
++}
++
+ static void destroy_surface(struct swaylock_surface *surface) {
++	swaylock_log(LOG_DEBUG, "Destroy surface for output %s", surface->output_name);
++
+ 	wl_list_remove(&surface->link);
+ 	if (surface->layer_surface != NULL) {
+ 		zwlr_layer_surface_v1_destroy(surface->layer_surface);
+@@ -102,6 +251,9 @@
+ 	}
+ 	destroy_buffer(&surface->buffers[0]);
+ 	destroy_buffer(&surface->buffers[1]);
++	destroy_buffer(&surface->indicator_buffers[0]);
++	destroy_buffer(&surface->indicator_buffers[1]);
++	fade_destroy(&surface->fade);
+ 	wl_output_destroy(surface->output);
+ 	free(surface);
+ }
+@@ -112,17 +264,39 @@
+ 		struct swaylock_surface *surface);
+ 
+ static bool surface_is_opaque(struct swaylock_surface *surface) {
++	if (!fade_is_complete(&surface->fade)) {
++		return false;
++	}
+ 	if (surface->image) {
+ 		return cairo_surface_get_content(surface->image) == CAIRO_CONTENT_COLOR;
+ 	}
+ 	return (surface->state->args.colors.background & 0xff) == 0xff;
+ }
+ 
++struct zxdg_output_v1_listener _xdg_output_listener;
++
+ static void create_layer_surface(struct swaylock_surface *surface) {
+ 	struct swaylock_state *state = surface->state;
+ 
++	if (state->args.fade_in) {
++		surface->fade.target_time = state->args.fade_in;
++	}
++
+ 	surface->image = select_image(state, surface);
+ 
++	static bool has_printed_zxdg_error = false;
++	if (state->zxdg_output_manager) {
++		surface->xdg_output = zxdg_output_manager_v1_get_xdg_output(
++				state->zxdg_output_manager, surface->output);
++		zxdg_output_v1_add_listener(
++				surface->xdg_output, &_xdg_output_listener, surface);
++		surface->events_pending += 1;
++	} else if (!has_printed_zxdg_error) {
++		swaylock_log(LOG_INFO, "Compositor does not support zxdg output "
++				"manager, images assigned to named outputs will not work");
++		has_printed_zxdg_error = true;
++	}
++
+ 	surface->surface = wl_compositor_create_surface(state->compositor);
+ 	assert(surface->surface);
+ 
+@@ -148,7 +322,13 @@
+ 			surface->layer_surface, true);
+ 	zwlr_layer_surface_v1_add_listener(surface->layer_surface,
+ 			&layer_surface_listener, surface);
++	surface->events_pending += 1;
++
++	wl_surface_commit(surface->surface);
++}
+ 
++static void initially_render_surface(struct swaylock_surface *surface) {
++	swaylock_log(LOG_DEBUG, "Surface for output %s ready", surface->output_name);
+ 	if (surface_is_opaque(surface) &&
+ 			surface->state->args.mode != BACKGROUND_MODE_CENTER &&
+ 			surface->state->args.mode != BACKGROUND_MODE_FIT) {
+@@ -159,24 +339,31 @@
+ 		wl_region_destroy(region);
+ 	}
+ 
+-	wl_surface_commit(surface->surface);
++	render_frame_background(surface);
++	render_background_fade_prepare(surface, surface->current_buffer);
++	render_frame(surface);
+ }
+ 
+ static void layer_surface_configure(void *data,
+ 		struct zwlr_layer_surface_v1 *layer_surface,
+ 		uint32_t serial, uint32_t width, uint32_t height) {
++	swaylock_trace();
+ 	struct swaylock_surface *surface = data;
+ 	surface->width = width;
+ 	surface->height = height;
+-	surface->indicator_width = 1;
+-	surface->indicator_height = 1;
++	surface->indicator_width = 0;
++	surface->indicator_height = 0;
+ 	zwlr_layer_surface_v1_ack_configure(layer_surface, serial);
+-	render_frame_background(surface);
+-	render_frame(surface);
++
++	if (!surface->configured && --surface->events_pending == 0) {
++		initially_render_surface(surface);
++	}
++	surface->configured = true;
+ }
+ 
+ static void layer_surface_closed(void *data,
+ 		struct zwlr_layer_surface_v1 *layer_surface) {
++	swaylock_trace();
+ 	struct swaylock_surface *surface = data;
+ 	destroy_surface(surface);
+ }
+@@ -200,9 +387,14 @@
+ 		struct wl_callback *callback = wl_surface_frame(surface->surface);
+ 		wl_callback_add_listener(callback, &surface_frame_listener, surface);
+ 		surface->frame_pending = true;
++		surface->dirty = false;
++
++		if (!fade_is_complete(&surface->fade)) {
++			render_background_fade(surface, time);
++			surface->dirty = true;
++		}
+ 
+ 		render_frame(surface);
+-		surface->dirty = false;
+ 	}
+ }
+ 
+@@ -233,8 +425,10 @@
+ 		int32_t x, int32_t y, int32_t width_mm, int32_t height_mm,
+ 		int32_t subpixel, const char *make, const char *model,
+ 		int32_t transform) {
++	swaylock_trace();
+ 	struct swaylock_surface *surface = data;
+ 	surface->subpixel = subpixel;
++	surface->transform = transform;
+ 	if (surface->state->run_display) {
+ 		damage_surface(surface);
+ 	}
+@@ -251,6 +445,7 @@
+ 
+ static void handle_wl_output_scale(void *data, struct wl_output *output,
+ 		int32_t factor) {
++	swaylock_trace();
+ 	struct swaylock_surface *surface = data;
+ 	surface->scale = factor;
+ 	if (surface->state->run_display) {
+@@ -265,6 +460,183 @@
+ 	.scale = handle_wl_output_scale,
+ };
+ 
++static struct wl_buffer *create_shm_buffer(struct wl_shm *shm, enum wl_shm_format fmt,
++		int width, int height, int stride, void **data_out) {
++	int size = stride * height;
++
++	const char shm_name[] = "/swaylock-shm";
++	int fd = shm_open(shm_name, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
++	if (fd < 0) {
++		fprintf(stderr, "shm_open failed\n");
++		return NULL;
++	}
++	shm_unlink(shm_name);
++
++	int ret;
++	while ((ret = ftruncate(fd, size)) == EINTR) {
++		// No-op
++	}
++	if (ret < 0) {
++		close(fd);
++		fprintf(stderr, "ftruncate failed\n");
++		return NULL;
++	}
++
++	void *data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
++	if (data == MAP_FAILED) {
++		fprintf(stderr, "mmap failed: %m\n");
++		close(fd);
++		return NULL;
++	}
++
++	struct wl_shm_pool *pool = wl_shm_create_pool(shm, fd, size);
++	close(fd);
++	struct wl_buffer *buffer = wl_shm_pool_create_buffer(pool, 0, width, height,
++		stride, fmt);
++	wl_shm_pool_destroy(pool);
++
++	*data_out = data;
++	return buffer;
++}
++
++static cairo_surface_t *apply_effects(cairo_surface_t *image, struct swaylock_state *state, int scale) {
++	if (state->args.effects_count == 0) {
++		return image;
++	}
++
++	if (state->args.time_effects) {
++		return swaylock_effects_run_timed(
++				image, scale,
++				state->args.effects, state->args.effects_count);
++	} else {
++		return swaylock_effects_run(
++				image, scale,
++				state->args.effects, state->args.effects_count);
++	}
++}
++
++static void handle_screencopy_frame_buffer(void *data,
++		struct zwlr_screencopy_frame_v1 *frame, uint32_t format, uint32_t width,
++		uint32_t height, uint32_t stride) {
++	swaylock_trace();
++	struct swaylock_surface *surface = data;
++
++	struct swaylock_image *image = calloc(1, sizeof(struct swaylock_image));
++	image->path = NULL;
++	image->output_name = surface->output_name;
++
++	void *bufdata;
++	struct wl_buffer *buf = create_shm_buffer(surface->state->shm, format, width, height, stride, &bufdata);
++	if (buf == NULL) {
++		free(image);
++		return;
++	}
++
++	surface->screencopy.format = format;
++	surface->screencopy.width = width;
++	surface->screencopy.height = height;
++	surface->screencopy.stride = stride;
++
++	surface->screencopy.image = image;
++	surface->screencopy.data = bufdata;
++
++	zwlr_screencopy_frame_v1_copy(frame, buf);
++}
++
++static void handle_screencopy_frame_flags(void *data,
++		struct zwlr_screencopy_frame_v1 *frame, uint32_t flags) {
++	swaylock_trace();
++	struct swaylock_surface *surface = data;
++
++	// The transform affecting a screenshot consists of three parts:
++	// Whether it's flipped vertically, whether it's flipped horizontally,
++	// and the four rotation options (0, 90, 180, 270).
++	// Any of the combinations of vertical flips, horizontal flips and rotation,
++	// can be expressed in terms of only horizontal flips and rotation
++	// (which is what the enum wl_output_transform encodes).
++	// Therefore, instead of inverting the Y axis or keeping around the
++	// "was it vertically flipped?" bit, we just map our state space onto the
++	// state space encoded by wl_output_transform and let load_background_from_buffer
++	// handle the rest.
++	if (flags & ZWLR_SCREENCOPY_FRAME_V1_FLAGS_Y_INVERT) {
++		switch (surface->transform) {
++		case WL_OUTPUT_TRANSFORM_NORMAL:
++			surface->screencopy.transform = WL_OUTPUT_TRANSFORM_FLIPPED_180;
++			break;
++		case WL_OUTPUT_TRANSFORM_90:
++			surface->screencopy.transform = WL_OUTPUT_TRANSFORM_FLIPPED_90;
++			break;
++		case WL_OUTPUT_TRANSFORM_180:
++			surface->screencopy.transform = WL_OUTPUT_TRANSFORM_FLIPPED;
++			break;
++		case WL_OUTPUT_TRANSFORM_270:
++			surface->screencopy.transform = WL_OUTPUT_TRANSFORM_FLIPPED_270;
++			break;
++		case WL_OUTPUT_TRANSFORM_FLIPPED:
++			surface->screencopy.transform = WL_OUTPUT_TRANSFORM_180;
++			break;
++		case WL_OUTPUT_TRANSFORM_FLIPPED_90:
++			surface->screencopy.transform = WL_OUTPUT_TRANSFORM_90;
++			break;
++		case WL_OUTPUT_TRANSFORM_FLIPPED_180:
++			surface->screencopy.transform = WL_OUTPUT_TRANSFORM_NORMAL;
++			break;
++		case WL_OUTPUT_TRANSFORM_FLIPPED_270:
++			surface->screencopy.transform = WL_OUTPUT_TRANSFORM_270;
++			break;
++		}
++	} else {
++		surface->screencopy.transform = surface->transform;
++	}
++}
++
++static void handle_screencopy_frame_ready(void *data,
++		struct zwlr_screencopy_frame_v1 *frame, uint32_t tv_sec_hi,
++		uint32_t tv_sec_lo, uint32_t tv_nsec) {
++	swaylock_trace();
++	struct swaylock_surface *surface = data;
++	struct swaylock_state *state = surface->state;
++
++	cairo_surface_t *image = load_background_from_buffer(
++			surface->screencopy.data,
++			surface->screencopy.format,
++			surface->screencopy.width,
++			surface->screencopy.height,
++			surface->screencopy.stride,
++			surface->screencopy.transform);
++	if (image == NULL) {
++		swaylock_log(LOG_ERROR, "Failed to create image from screenshot");
++	} else  {
++		surface->screencopy.image->cairo_surface =
++			apply_effects(image, state, surface->scale);
++		surface->image = surface->screencopy.image->cairo_surface;
++	}
++
++	swaylock_log(LOG_DEBUG, "Loaded screenshot for output %s", surface->output_name);
++	wl_list_insert(&state->images, &surface->screencopy.image->link);
++	if (--surface->events_pending == 0) {
++		initially_render_surface(surface);
++	}
++}
++
++static void handle_screencopy_frame_failed(void *data,
++		struct zwlr_screencopy_frame_v1 *frame) {
++	swaylock_trace();
++	struct swaylock_surface *surface = data;
++	swaylock_log(LOG_ERROR, "Screencopy failed");
++
++	if (--surface->events_pending == 0) {
++		initially_render_surface(surface);
++	}
++}
++
++static const struct zwlr_screencopy_frame_v1_listener screencopy_frame_listener = {
++	.buffer = handle_screencopy_frame_buffer,
++	.flags = handle_screencopy_frame_flags,
++	.ready = handle_screencopy_frame_ready,
++	.failed = handle_screencopy_frame_failed,
++};
++
+ static void handle_xdg_output_logical_size(void *data, struct zxdg_output_v1 *output,
+ 		int width, int height) {
+ 	// Who cares
+@@ -277,6 +649,7 @@
+ 
+ static void handle_xdg_output_name(void *data, struct zxdg_output_v1 *output,
+ 		const char *name) {
++	swaylock_trace();
+ 	swaylock_log(LOG_DEBUG, "output name is %s", name);
+ 	struct swaylock_surface *surface = data;
+ 	surface->xdg_output = output;
+@@ -289,7 +662,36 @@
+ }
+ 
+ static void handle_xdg_output_done(void *data, struct zxdg_output_v1 *output) {
+-	// Who cares
++	swaylock_trace();
++	struct swaylock_surface *surface = data;
++	struct swaylock_state *state = surface->state;
++	cairo_surface_t *new_image = select_image(surface->state, surface);
++
++	if (new_image == surface->image && state->args.screenshots) {
++		static bool has_printed_screencopy_error = false;
++		if (state->screencopy_manager) {
++			surface->screencopy_frame = zwlr_screencopy_manager_v1_capture_output(
++					state->screencopy_manager, false, surface->output);
++			zwlr_screencopy_frame_v1_add_listener(surface->screencopy_frame,
++					&screencopy_frame_listener, surface);
++			surface->events_pending += 1;
++		} else if (!has_printed_screencopy_error) {
++			swaylock_log(LOG_INFO, "Compositor does not support screencopy manager, "
++					"screenshots will not work");
++			has_printed_screencopy_error = true;
++		}
++	} else if (new_image != NULL) {
++		if (state->args.screenshots) {
++			swaylock_log(LOG_DEBUG,
++					"Using existing image instead of taking a screenshot for output %s.",
++					surface->output_name);
++		}
++		surface->image = new_image;
++	}
++
++	if (--surface->events_pending == 0) {
++		initially_render_surface(surface);
++	}
+ }
+ 
+ struct zxdg_output_v1_listener _xdg_output_listener = {
+@@ -302,10 +704,11 @@
+ 
+ static void handle_global(void *data, struct wl_registry *registry,
+ 		uint32_t name, const char *interface, uint32_t version) {
++
+ 	struct swaylock_state *state = data;
+ 	if (strcmp(interface, wl_compositor_interface.name) == 0) {
+ 		state->compositor = wl_registry_bind(registry, name,
+-				&wl_compositor_interface, 3);
++				&wl_compositor_interface, 4);
+ 	} else if (strcmp(interface, wl_subcompositor_interface.name) == 0) {
+ 		state->subcompositor = wl_registry_bind(registry, name,
+ 				&wl_subcompositor_interface, 1);
+@@ -314,7 +717,7 @@
+ 				&wl_shm_interface, 1);
+ 	} else if (strcmp(interface, wl_seat_interface.name) == 0) {
+ 		struct wl_seat *seat = wl_registry_bind(
+-				registry, name, &wl_seat_interface, 3);
++				registry, name, &wl_seat_interface, 4);
+ 		struct swaylock_seat *swaylock_seat =
+ 			calloc(1, sizeof(struct swaylock_seat));
+ 		swaylock_seat->state = state;
+@@ -342,6 +745,9 @@
+ 			create_layer_surface(surface);
+ 			wl_display_roundtrip(state->display);
+ 		}
++	} else if (strcmp(interface, zwlr_screencopy_manager_v1_interface.name) == 0) {
++		state->screencopy_manager = wl_registry_bind(registry, name,
++				&zwlr_screencopy_manager_v1_interface, 1);
+ 	}
+ }
+ 
+@@ -448,6 +854,7 @@
+ 		free(image);
+ 		return;
+ 	}
++
+ 	wl_list_insert(&state->images, &image->link);
+ 	swaylock_log(LOG_DEBUG, "Loaded image %s for output %s", image->path,
+ 			image->output_name ? image->output_name : "*");
+@@ -502,6 +909,7 @@
+ static int parse_options(int argc, char **argv, struct swaylock_state *state,
+ 		enum line_mode *line_mode, char **config_path) {
+ 	enum long_option_codes {
++		LO_TRACE,
+ 		LO_BS_HL_COLOR = 256,
+ 		LO_CAPS_LOCK_BS_HL_COLOR,
+ 		LO_CAPS_LOCK_KEY_HL_COLOR,
+@@ -537,16 +945,35 @@
+ 		LO_TEXT_CAPS_LOCK_COLOR,
+ 		LO_TEXT_VER_COLOR,
+ 		LO_TEXT_WRONG_COLOR,
++		LO_EFFECT_BLUR,
++		LO_EFFECT_PIXELATE,
++		LO_EFFECT_SCALE,
++		LO_EFFECT_GREYSCALE,
++		LO_EFFECT_VIGNETTE,
++		LO_EFFECT_COMPOSE,
++		LO_EFFECT_CUSTOM,
++		LO_TIME_EFFECTS,
++		LO_INDICATOR,
++		LO_CLOCK,
++		LO_TIMESTR,
++		LO_DATESTR,
++		LO_FADE_IN,
++		LO_SUBMIT_ON_TOUCH,
++		LO_GRACE,
++		LO_GRACE_NO_MOUSE,
++		LO_GRACE_NO_TOUCH,
+ 	};
+ 
+ 	static struct option long_options[] = {
+ 		{"config", required_argument, NULL, 'C'},
+ 		{"color", required_argument, NULL, 'c'},
+ 		{"debug", no_argument, NULL, 'd'},
++		{"trace", no_argument, NULL, LO_TRACE},
+ 		{"ignore-empty-password", no_argument, NULL, 'e'},
+ 		{"daemonize", no_argument, NULL, 'f'},
+ 		{"help", no_argument, NULL, 'h'},
+ 		{"image", required_argument, NULL, 'i'},
++		{"screenshots", no_argument, NULL, 'S'},
+ 		{"disable-caps-lock-text", no_argument, NULL, 'L'},
+ 		{"indicator-caps-lock", no_argument, NULL, 'l'},
+ 		{"line-uses-inside", no_argument, NULL, 'n'},
+@@ -593,6 +1020,23 @@
+ 		{"text-caps-lock-color", required_argument, NULL, LO_TEXT_CAPS_LOCK_COLOR},
+ 		{"text-ver-color", required_argument, NULL, LO_TEXT_VER_COLOR},
+ 		{"text-wrong-color", required_argument, NULL, LO_TEXT_WRONG_COLOR},
++		{"effect-blur", required_argument, NULL, LO_EFFECT_BLUR},
++		{"effect-pixelate", required_argument, NULL, LO_EFFECT_PIXELATE},
++		{"effect-scale", required_argument, NULL, LO_EFFECT_SCALE},
++		{"effect-greyscale", no_argument, NULL, LO_EFFECT_GREYSCALE},
++		{"effect-vignette", required_argument, NULL, LO_EFFECT_VIGNETTE},
++		{"effect-compose", required_argument, NULL, LO_EFFECT_COMPOSE},
++		{"effect-custom", required_argument, NULL, LO_EFFECT_CUSTOM},
++		{"time-effects", no_argument, NULL, LO_TIME_EFFECTS},
++		{"indicator", no_argument, NULL, LO_INDICATOR},
++		{"clock", no_argument, NULL, LO_CLOCK},
++		{"timestr", required_argument, NULL, LO_TIMESTR},
++		{"datestr", required_argument, NULL, LO_DATESTR},
++		{"fade-in", required_argument, NULL, LO_FADE_IN},
++		{"submit-on-touch", no_argument, NULL, LO_SUBMIT_ON_TOUCH},
++		{"grace", required_argument, NULL, LO_GRACE},
++		{"grace-no-mouse", no_argument, NULL, LO_GRACE_NO_MOUSE},
++		{"grace-no-touch", no_argument, NULL, LO_GRACE_NO_TOUCH},
+ 		{0, 0, 0, 0}
+ 	};
+ 
+@@ -605,16 +1049,30 @@
+ 			"Turn the screen into the given color instead of white.\n"
+ 		"  -d, --debug                      "
+ 			"Enable debugging output.\n"
++		"  -t, --trace                      "
++			"Enable tracing output.\n"
+ 		"  -e, --ignore-empty-password      "
+ 			"When an empty password is provided, do not validate it.\n"
+ 		"  -F, --show-failed-attempts       "
+ 			"Show current count of failed authentication attempts.\n"
+ 		"  -f, --daemonize                  "
+ 			"Detach from the controlling terminal after locking.\n"
++		"  --fade-in <seconds>              "
++			"Make the lock screen fade in instead of just popping in.\n"
++		"  --submit-on-touch                "
++			"Submit password in response to a touch event.\n"
++		"  --grace <seconds>                "
++			"Password grace period. Don't require the password for the first N seconds.\n"
++		"  --grace-no-mouse                 "
++			"During the grace period, don't unlock on a mouse event.\n"
++		"  --grace-no-touch                 "
++			"During the grace period, don't unlock on a touch event.\n"
+ 		"  -h, --help                       "
+ 			"Show help message and quit.\n"
+ 		"  -i, --image [[<output>]:]<path>  "
+ 			"Display the given image, optionally only on the given output.\n"
++		"  -S, --screenshots                "
++			"Use a screenshots as the background image.\n"
+ 		"  -k, --show-keyboard-layout       "
+ 			"Display the current xkb layout while typing.\n"
+ 		"  -K, --hide-keyboard-layout       "
+@@ -629,6 +1087,14 @@
+ 			"Same as --scaling=tile.\n"
+ 		"  -u, --no-unlock-indicator        "
+ 			"Disable the unlock indicator.\n"
++		"  --indicator                      "
++			"Always show the indicator.\n"
++		"  --clock                          "
++			"Show time and date.\n"
++		"  --timestr <format>               "
++			"The format string for the time. Defaults to '%T'.\n"
++		"  --datestr <format>               "
++			"The format string for the date. Defaults to '%a, %x'.\n"
+ 		"  -v, --version                    "
+ 			"Show the version number and quit.\n"
+ 		"  --bs-hl-color <color>            "
+@@ -713,6 +1179,20 @@
+ 			"Sets the color of the text when verifying.\n"
+ 		"  --text-wrong-color <color>       "
+ 			"Sets the color of the text when invalid.\n"
++		"  --effect-blur <radius>x<times>   "
++			"Blur images.\n"
++		"  --effect-pixelate <factor>       "
++			"Pixelate images.\n"
++		"  --effect-scale <scale>           "
++			"Scale images.\n"
++		"  --effect-greyscale               "
++			"Make images greyscale.\n"
++		"  --effect-vignette <base>:<factor>"
++			"Apply a vignette effect to images. Base and factor should be numbers between 0 and 1.\n"
++		"  --effect-custom <path>           "
++			"Apply a custom effect from a shared object or C source file.\n"
++		"  --time-effects                   "
++			"Measure the time it takes to run each effect.\n"
+ 		"\n"
+ 		"All <color> options are of the form <rrggbb[aa]>.\n";
+ 
+@@ -720,7 +1200,7 @@
+ 	optind = 1;
+ 	while (1) {
+ 		int opt_idx = 0;
+-		c = getopt_long(argc, argv, "c:deFfhi:kKLlnrs:tuvC:", long_options,
++		c = getopt_long(argc, argv, "c:deFfhi:SkKLlnrs:tuvC:", long_options,
+ 				&opt_idx);
+ 		if (c == -1) {
+ 			break;
+@@ -739,6 +1219,9 @@
+ 		case 'd':
+ 			swaylock_log_init(LOG_DEBUG);
+ 			break;
++		case LO_TRACE:
++			swaylock_log_init(LOG_TRACE);
++			break;
+ 		case 'e':
+ 			if (state) {
+ 				state->args.ignore_empty = true;
+@@ -759,6 +1242,11 @@
+ 				load_image(optarg, state);
+ 			}
+ 			break;
++		case 'S':
++			if (state) {
++				state->args.screenshots = true;
++			}
++			break;
+ 		case 'k':
+ 			if (state) {
+ 				state->args.show_keyboard_layout = true;
+@@ -797,7 +1285,7 @@
+ 				}
+ 			}
+ 			break;
+-		case 't':
++		case 'T':
+ 			if (state) {
+ 				state->args.mode = BACKGROUND_MODE_TILE;
+ 			}
+@@ -989,6 +1477,129 @@
+ 				state->args.colors.text.wrong = parse_color(optarg);
+ 			}
+ 			break;
++		case LO_EFFECT_BLUR:
++			if (state) {
++				state->args.effects = realloc(state->args.effects,
++						sizeof(*state->args.effects) * ++state->args.effects_count);
++				struct swaylock_effect *effect = &state->args.effects[state->args.effects_count - 1];
++				effect->tag = EFFECT_BLUR;
++				if (sscanf(optarg, "%dx%d", &effect->e.blur.radius, &effect->e.blur.times) != 2) {
++					swaylock_log(LOG_ERROR, "Invalid blur effect argument %s, ignoring", optarg);
++					state->args.effects_count -= 1;
++				}
++			}
++			break;
++		case LO_EFFECT_PIXELATE:
++			if (state) {
++				state->args.effects = realloc(state->args.effects,
++						sizeof(*state->args.effects) * ++state->args.effects_count);
++				struct swaylock_effect *effect = &state->args.effects[state->args.effects_count - 1];
++				effect->tag = EFFECT_PIXELATE;
++				effect->e.pixelate.factor = atoi(optarg);
++			}
++			break;
++		case LO_EFFECT_SCALE:
++			if (state) {
++				state->args.effects = realloc(state->args.effects,
++						sizeof(*state->args.effects) * ++state->args.effects_count);
++				struct swaylock_effect *effect = &state->args.effects[state->args.effects_count - 1];
++				effect->tag = EFFECT_SCALE;
++				if (sscanf(optarg, "%lf", &effect->e.scale) != 1) {
++					swaylock_log(LOG_ERROR, "Invalid scale effect argument %s, ignoring", optarg);
++					state->args.effects_count -= 1;
++				}
++			}
++			break;
++		case LO_EFFECT_GREYSCALE:
++			if (state) {
++				state->args.effects = realloc(state->args.effects,
++						sizeof(*state->args.effects) * ++state->args.effects_count);
++				struct swaylock_effect *effect = &state->args.effects[state->args.effects_count - 1];
++				effect->tag = EFFECT_GREYSCALE;
++			}
++			break;
++		case LO_EFFECT_VIGNETTE:
++			if (state) {
++				state->args.effects = realloc(state->args.effects,
++						sizeof(*state->args.effects) * ++state->args.effects_count);
++				struct swaylock_effect *effect = &state->args.effects[state->args.effects_count - 1];
++				effect->tag = EFFECT_VIGNETTE;
++				if (sscanf(optarg, "%lf:%lf", &effect->e.vignette.base, &effect->e.vignette.factor) != 2) {
++					swaylock_log(LOG_ERROR, "Invalid factor effect argument %s, ignoring", optarg);
++					state->args.effects_count -= 1;
++				}
++			}
++			break;
++		case LO_EFFECT_COMPOSE:
++			if (state) {
++				state->args.effects = realloc(state->args.effects,
++						sizeof(*state->args.effects) * ++state->args.effects_count);
++				struct swaylock_effect *effect = &state->args.effects[state->args.effects_count - 1];
++				effect->tag = EFFECT_COMPOSE;
++				parse_effect_compose(optarg, effect);
++			}
++			break;
++		case LO_EFFECT_CUSTOM:
++			if (state) {
++				state->args.effects = realloc(state->args.effects,
++						sizeof(*state->args.effects) * ++state->args.effects_count);
++				struct swaylock_effect *effect = &state->args.effects[state->args.effects_count - 1];
++				effect->tag = EFFECT_CUSTOM;
++				effect->e.custom = strdup(optarg);
++			}
++			break;
++		case LO_TIME_EFFECTS:
++			if (state) {
++				state->args.time_effects = true;
++			}
++			break;
++		case LO_INDICATOR:
++			if (state) {
++				state->args.indicator = true;
++			}
++			break;
++		case LO_CLOCK:
++			if (state) {
++				state->args.clock = true;
++			}
++			break;
++		case LO_TIMESTR:
++			if (state) {
++				free(state->args.timestr);
++				state->args.timestr = strdup(optarg);
++			}
++			break;
++		case LO_DATESTR:
++			if (state) {
++				free(state->args.datestr);
++				state->args.datestr = strdup(optarg);
++			}
++			break;
++		case LO_FADE_IN:
++			if (state) {
++				state->args.fade_in = parse_seconds(optarg);
++			}
++			break;
++		case LO_SUBMIT_ON_TOUCH:
++			if (state) {
++				state->args.password_submit_on_touch = true;
++			}
++			break;
++		case LO_GRACE:
++			if (state) {
++				state->args.password_grace_period = parse_seconds(optarg);
++			}
++			break;
++		case LO_GRACE_NO_MOUSE:
++			if (state) {
++				state->args.password_grace_no_mouse = true;
++			}
++			break;
++		case LO_GRACE_NO_TOUCH:
++			if (state) {
++				state->args.password_grace_no_touch = true;
++			}
++			break;
+ 		default:
+ 			fprintf(stderr, "%s", usage);
+ 			return 1;
+@@ -1057,7 +1668,7 @@
+ 		char *flag = malloc(nread + 3);
+ 		if (flag == NULL) {
+ 			free(line);
+-			free(config);
++			fclose(config);
+ 			swaylock_log(LOG_ERROR, "Failed to allocate memory");
+ 			return 0;
+ 		}
+@@ -1082,6 +1693,13 @@
+ 	}
+ }
+ 
++static void end_grace_period(void *data) {
++	struct swaylock_state *state = data;
++	if (state->auth_state == AUTH_STATE_GRACE) {
++		state->auth_state = AUTH_STATE_IDLE;
++	}
++}
++
+ static void comm_in(int fd, short mask, void *data) {
+ 	if (read_comm_reply()) {
+ 		// Authentication succeeded
+@@ -1094,6 +1712,12 @@
+ 	}
+ }
+ 
++static void timer_render(void *data) {
++	struct swaylock_state *state = (struct swaylock_state *)data;
++	damage_state(state);
++	loop_add_timer(state->eventloop, 1000, timer_render, state);
++}
++
+ int main(int argc, char **argv) {
+ 	swaylock_log_init(LOG_ERROR);
+ 	initialize_pw_backend(argc, argv);
+@@ -1101,11 +1725,12 @@
+ 
+ 	enum line_mode line_mode = LM_LINE;
+ 	state.failed_attempts = 0;
++	state.indicator_dirty = false;
+ 	state.args = (struct swaylock_args){
+ 		.mode = BACKGROUND_MODE_FILL,
+ 		.font = strdup("sans-serif"),
+ 		.font_size = 0,
+-		.radius = 50,
++		.radius = 75,
+ 		.thickness = 10,
+ 		.indicator_x_position = 0,
+ 		.indicator_y_position = 0,
+@@ -1118,7 +1743,16 @@
+ 		.show_keyboard_layout = false,
+ 		.hide_keyboard_layout = false,
+ 		.show_failed_attempts = false,
+-		.indicator_idle_visible = false
++		.indicator_idle_visible = false,
++
++		.screenshots = false,
++		.effects = NULL,
++		.effects_count = 0,
++		.indicator = false,
++		.clock = false,
++		.timestr = strdup("%T"),
++		.datestr = strdup("%a, %x"),
++		.password_grace_period = 0,
+ 	};
+ 	wl_list_init(&state.images);
+ 	set_default_colors(&state.args.colors);
+@@ -1158,6 +1792,10 @@
+ 		state.args.colors.line = state.args.colors.ring;
+ 	}
+ 
++	if (state.args.password_grace_period > 0) {
++		state.auth_state = AUTH_STATE_GRACE;
++	}
++
+ #ifdef __linux__
+ 	// Most non-linux platforms require root to mlock()
+ 	if (mlock(state.password.buffer, sizeof(state.password.buffer)) != 0) {
+@@ -1196,18 +1834,18 @@
+ 		return 2;
+ 	}
+ 
+-	if (state.zxdg_output_manager) {
+-		struct swaylock_surface *surface;
+-		wl_list_for_each(surface, &state.surfaces, link) {
+-			surface->xdg_output = zxdg_output_manager_v1_get_xdg_output(
+-						state.zxdg_output_manager, surface->output);
+-			zxdg_output_v1_add_listener(
+-					surface->xdg_output, &_xdg_output_listener, surface);
+-		}
++	// Must daemonize before we run any effects, since effects use openmp
++	int daemonfd;
++	if (state.args.daemonize) {
+ 		wl_display_roundtrip(state.display);
+-	} else {
+-		swaylock_log(LOG_INFO, "Compositor does not support zxdg output "
+-				"manager, images assigned to named outputs will not work");
++		daemonfd = daemonize_start();
++	}
++
++	// Need to apply effects to all images loaded with --image
++	struct swaylock_image *iter_image, *temp;
++	wl_list_for_each_safe(iter_image, temp, &state.images, link) {
++		iter_image->cairo_surface = apply_effects(
++				iter_image->cairo_surface, &state, 1);
+ 	}
+ 
+ 	struct swaylock_surface *surface;
+@@ -1215,9 +1853,10 @@
+ 		create_layer_surface(surface);
+ 	}
+ 
+-	if (state.args.daemonize) {
+-		wl_display_roundtrip(state.display);
+-		daemonize();
++	wl_list_for_each(surface, &state.surfaces, link) {
++		while (surface->events_pending > 0) {
++			wl_display_roundtrip(state.display);
++		}
+ 	}
+ 
+ 	state.eventloop = loop_create();
+@@ -1226,6 +1865,21 @@
+ 
+ 	loop_add_fd(state.eventloop, get_comm_reply_fd(), POLLIN, comm_in, NULL);
+ 
++	loop_add_timer(state.eventloop, 1000, timer_render, &state);
++
++	if (state.args.daemonize && state.args.fade_in) {
++		loop_add_timer(state.eventloop, state.args.fade_in + 500, daemonize_done, &daemonfd);
++	} else if (state.args.daemonize) {
++		daemonize_done(&daemonfd);
++	}
++
++	if (state.args.password_grace_period > 0) {
++		loop_add_timer(state.eventloop, state.args.password_grace_period, end_grace_period, &state);
++	}
++
++	// Re-draw once to start the draw loop
++	damage_state(&state);
++
+ 	state.run_display = true;
+ 	while (state.run_display) {
+ 		errno = 0;
+@@ -1235,6 +1889,10 @@
+ 		loop_poll(state.eventloop);
+ 	}
+ 
++	if (state.args.daemonize && state.args.fade_in) {
++		daemonize_done(&daemonfd); // In case we exit before --fade-in timeout
++	}
++
+ 	free(state.args.font);
+ 	return 0;
+ }
+diff -urN swaylock-1.5/meson.build swaylock-effects/meson.build
+--- swaylock-1.5/meson.build	2022-02-03 12:05:03.000000000 +0100
++++ swaylock-effects/meson.build	2022-01-29 23:27:40.720097161 +0100
+@@ -7,7 +7,7 @@
+ 	default_options: [
+ 		'c_std=c11',
+ 		'warning_level=2',
+-		'werror=true',
++		'werror=false',
+ 	],
+ )
+ 
+@@ -17,6 +17,14 @@
+ 		'-Wno-unused-result',
+ 		'-Wundef',
+ 		'-Wvla',
++		'-fopenmp',
++	],
++	language: 'c',
++)
++
++add_project_link_arguments(
++	[
++		'-fopenmp',
+ 	],
+ 	language: 'c',
+ )
+@@ -35,6 +43,19 @@
+ 	add_project_arguments('-D_C11_SOURCE', language: 'c')
+ endif
+ 
++if get_option('sse')
++	add_project_arguments('-DUSE_SSE', language: 'c')
++endif
++
++test_cflags = [
++	'-mtune=native',
++]
++foreach cflag : test_cflags
++	if cc.has_argument(cflag)
++		add_project_arguments(cflag, language: 'c')
++	endif
++endforeach
++
+ wayland_client = dependency('wayland-client')
+ wayland_protos = dependency('wayland-protocols', version: '>=1.14')
+ xkbcommon      = dependency('xkbcommon')
+@@ -45,6 +66,8 @@
+ libpam         = cc.find_library('pam', required: get_option('pam'))
+ crypt          = cc.find_library('crypt', required: not libpam.found())
+ math           = cc.find_library('m')
++rt             = cc.find_library('rt')
++dl             = cc.find_library('dl')
+ 
+ git = find_program('git', required: false)
+ scdoc = find_program('scdoc', required: get_option('man-pages'))
+@@ -88,6 +111,7 @@
+ 	[wl_protocol_dir, 'unstable/xdg-output/xdg-output-unstable-v1.xml'],
+ 	['wlr-layer-shell-unstable-v1.xml'],
+ 	['wlr-input-inhibitor-unstable-v1.xml'],
++	['wlr-screencopy-unstable-v1.xml'],
+ ]
+ 
+ foreach p : client_protocols
+@@ -117,6 +141,8 @@
+ 	client_protos,
+ 	gdk_pixbuf,
+ 	math,
++	rt,
++	dl,
+ 	xkbcommon,
+ 	wayland_client,
+ ]
+@@ -133,6 +159,8 @@
+ 	'render.c',
+ 	'seat.c',
+ 	'unicode.c',
++	'effects.c',
++	'fade.c',
+ ]
+ 
+ if libpam.found()
+@@ -189,7 +217,7 @@
+ 	zsh_files = files(
+ 		'completions/zsh/_swaylock',
+ 	)
+-	zsh_install_dir = datadir + '/zsh/vendor-completions'
++	zsh_install_dir = datadir + '/zsh/site-functions'
+ 
+ 	install_data(zsh_files, install_dir: zsh_install_dir)
+ endif
+diff -urN swaylock-1.5/meson_options.txt swaylock-effects/meson_options.txt
+--- swaylock-1.5/meson_options.txt	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/meson_options.txt	2022-01-29 23:27:40.720097161 +0100
+@@ -4,3 +4,4 @@
+ option('zsh-completions', type: 'boolean', value: true, description: 'Install zsh shell completions')
+ option('bash-completions', type: 'boolean', value: true, description: 'Install bash shell completions')
+ option('fish-completions', type: 'boolean', value: true, description: 'Install fish shell completions')
++option('sse', type: 'boolean', value: true, description: 'Use SSE instructions where possible')
+diff -urN swaylock-1.5/pam.c swaylock-effects/pam.c
+--- swaylock-1.5/pam.c	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/pam.c	2022-01-29 23:27:40.720097161 +0100
+@@ -112,6 +112,8 @@
+ 		pw_buf = NULL;
+ 	}
+ 
++	pam_setcred(auth_handle, PAM_REFRESH_CRED);
++
+ 	if (pam_end(auth_handle, pam_status) != PAM_SUCCESS) {
+ 		swaylock_log(LOG_ERROR, "pam_end failed");
+ 		exit(EXIT_FAILURE);
+diff -urN swaylock-1.5/password.c swaylock-effects/password.c
+--- swaylock-1.5/password.c	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/password.c	2022-01-29 23:27:40.720097161 +0100
+@@ -92,8 +92,27 @@
+ 	damage_state(state);
+ }
+ 
++void swaylock_handle_mouse(struct swaylock_state *state) {
++	if (state->auth_state == AUTH_STATE_GRACE && !state->args.password_grace_no_mouse) {
++		state->run_display = false;
++	}
++}
++
++void swaylock_handle_touch(struct swaylock_state *state) {
++	if (state->auth_state == AUTH_STATE_GRACE && !state->args.password_grace_no_touch) {
++		state->run_display = false;
++	} else if (state->auth_state != AUTH_STATE_VALIDATING && state->args.password_submit_on_touch) {
++		submit_password(state);
++	}
++}
++
+ void swaylock_handle_key(struct swaylock_state *state,
+ 		xkb_keysym_t keysym, uint32_t codepoint) {
++	// Authentication not needed
++	if (state->auth_state == AUTH_STATE_GRACE) {
++		state->run_display = false;
++		return;
++	}
+ 	// Ignore input events if validating
+ 	if (state->auth_state == AUTH_STATE_VALIDATING) {
+ 		return;
+@@ -111,6 +130,7 @@
+ 		} else {
+ 			state->auth_state = AUTH_STATE_CLEAR;
+ 		}
++		state->indicator_dirty = true;
+ 		damage_state(state);
+ 		schedule_indicator_clear(state);
+ 		schedule_password_clear(state);
+@@ -118,7 +138,7 @@
+ 	case XKB_KEY_Escape:
+ 		clear_password_buffer(&state->password);
+ 		state->auth_state = AUTH_STATE_CLEAR;
+-		damage_state(state);
++		state->indicator_dirty = true;
+ 		schedule_indicator_clear(state);
+ 		break;
+ 	case XKB_KEY_Caps_Lock:
+@@ -159,6 +179,7 @@
+ 		if (codepoint) {
+ 			append_ch(&state->password, codepoint);
+ 			state->auth_state = AUTH_STATE_INPUT;
++			state->indicator_dirty = true;
+ 			damage_state(state);
+ 			schedule_indicator_clear(state);
+ 			schedule_password_clear(state);
+diff -urN swaylock-1.5/.pc/0001-Workaround-a-bug-in-scdoc.patch/swaylock.1.scd swaylock-effects/.pc/0001-Workaround-a-bug-in-scdoc.patch/swaylock.1.scd
+diff -urN swaylock-1.5/.pc/0002-Install-zsh-completions-into-usr-share-zsh-vendor-co.patch/meson.build swaylock-effects/.pc/0002-Install-zsh-completions-into-usr-share-zsh-vendor-co.patch/meson.build
+diff -urN swaylock-1.5/.pc/0003-Fix-the-version-in-the-buildfile.patch/meson.build swaylock-effects/.pc/0003-Fix-the-version-in-the-buildfile.patch/meson.build
+diff -urN swaylock-1.5/.pc/applied-patches swaylock-effects/.pc/applied-patches
+diff -urN swaylock-1.5/.pc/.quilt_patches swaylock-effects/.pc/.quilt_patches
+diff -urN swaylock-1.5/.pc/.quilt_series swaylock-effects/.pc/.quilt_series
+diff -urN swaylock-1.5/.pc/.version swaylock-effects/.pc/.version
+diff -urN swaylock-1.5/pool-buffer.c swaylock-effects/pool-buffer.c
+--- swaylock-1.5/pool-buffer.c	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/pool-buffer.c	2022-01-29 23:27:40.720097161 +0100
+@@ -72,18 +72,22 @@
+ 	uint32_t stride = width * 4;
+ 	size_t size = stride * height;
+ 
+-	char *name;
+-	int fd = create_pool_file(size, &name);
+-	assert(fd != -1);
+-	void *data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+-	struct wl_shm_pool *pool = wl_shm_create_pool(shm, fd, size);
+-	buf->buffer = wl_shm_pool_create_buffer(pool, 0,
+-			width, height, stride, format);
+-	wl_shm_pool_destroy(pool);
+-	close(fd);
+-	unlink(name);
+-	free(name);
+-	fd = -1;
++	void *data = NULL;
++	if (size > 0) {
++		char *name;
++		int fd = create_pool_file(size, &name);
++		assert(fd != -1);
++		data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
++		struct wl_shm_pool *pool = wl_shm_create_pool(shm, fd, size);
++		buf->buffer = wl_shm_pool_create_buffer(pool, 0,
++				width, height, stride, format);
++		wl_buffer_add_listener(buf->buffer, &buffer_listener, buf);
++		wl_shm_pool_destroy(pool);
++		close(fd);
++		unlink(name);
++		free(name);
++		fd = -1;
++	}
+ 
+ 	buf->size = size;
+ 	buf->width = width;
+@@ -92,8 +96,6 @@
+ 	buf->surface = cairo_image_surface_create_for_data(data,
+ 			CAIRO_FORMAT_ARGB32, width, height, stride);
+ 	buf->cairo = cairo_create(buf->surface);
+-
+-	wl_buffer_add_listener(buf->buffer, &buffer_listener, buf);
+ 	return buf;
+ }
+ 
+diff -urN swaylock-1.5/README.md swaylock-effects/README.md
+--- swaylock-1.5/README.md	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/README.md	2022-01-29 23:27:40.716097181 +0100
+@@ -1,30 +1,79 @@
+-# swaylock
++# swaylock-effects
+ 
+-swaylock is a screen locking utility for Wayland compositors. It is compatible
+-with any Wayland compositor which implements the following Wayland protocols:
++Swaylock-effects is a fork of [swaylock](https://github.com/swaywm/swaylock)
++which adds built-in screenshots and image manipulation effects like blurring.
++It's inspired by [i3lock-color](https://github.com/PandorasFox/i3lock-color),
++although the feature sets aren't perfectly overlapping.
++
++![Screenshot](https://raw.githubusercontent.com/mortie/swaylock-effects/master/screenshot.png)
++
++## Example Command
++
++	swaylock \
++		--screenshots \
++		--clock \
++		--indicator \
++		--indicator-radius 100 \
++		--indicator-thickness 7 \
++		--effect-blur 7x5 \
++		--effect-vignette 0.5:0.5 \
++		--ring-color bb00cc \
++		--key-hl-color 880033 \
++		--line-color 00000000 \
++		--inside-color 00000088 \
++		--separator-color 00000000 \
++		--grace 2 \
++		--fade-in 0.2
++
++## New Features
++
++The main new features compared to upstream swaylock are:
++
++* `--screenshots` to use screenshots instead of an image on disk or a color
++* `--clock` to show date/time in the indicator
++	* Use `--indicator` to make the indicator always active
++	* Use `--timestr` and `--datestr` to set the date/time formats
++	  (using strftime-style formatting)
++* `--submit-on-touch` to use your touchscreen to submit a password.
++  If you can unlock your device with anything else than your password,
++  this might come helpful to trigger PAM's authentication process.
++* `--grace <seconds>` to set a password grace period, so that the password
++  isn't required to unlock until some number of seconds have passed.
++	* Used together with `--indicator`, the indicator is always shown,
++	  even in the grace period.
++	* Used together with `--indicator-idle-visible`, the indicator is only
++	  visible after the grace period.
++	* By default, a key press, a mouse event or a touch event will unlock
++	  during the grace period. Use `--grace-no-mouse` to not unlock as a response
++	  to a mouse event, and `--grace-no-touch` to not unlock as a response to
++	  a touch event.
++* `--fade-in <seconds>` to make the lock screen fade in.
++* Various effects which can be applied to the background image
++	* `--effect-blur <radius>x<times>`: Blur the image (thanks to yvbbrjdr's
++	  fast box blur algorithm in
++	  [i3lock-fancy-rapid](https://github.com/yvbbrjdr/i3lock-fancy-rapid))
++	* `--effect-pixelate <factor>`: Pixelate the image.
++	* `--effect-scale <scale>`: Scale the image by a factor. This can be used
++	  to make other effects faster if you don't need the full resolution.
++	* `--effect-greyscale`: Make the image greyscale.
++	* `--effect-vignette <base>:<factor>`: Apply a vignette effect (range is 0-1).
++	* `--effect-compose <position>;<size>;<gravity>;<path>`: Overlay another image.
++	* `--effect-custom <path>`: Load a custom effect from a C file or shared object.
+ 
+-- wlr-layer-shell
+-- wlr-input-inhibitor
+-- xdg-output
+-- xdg-shell
+-
+-See the man page, `swaylock(1)`, for instructions on using swaylock.
+-
+-## Release Signatures
+-
+-Releases are signed with [B22DA89A](http://pgp.mit.edu/pks/lookup?op=vindex&search=0x52CB6609B22DA89A)
+-and published [on GitHub](https://github.com/swaywm/swaylock/releases). swaylock
+-releases are managed independently of sway releases.
++New feature ideas are welcome as issues (though I may never get around to
++implement them), new feature implementations are welcome as pull requests :)
+ 
+ ## Installation
+ 
+ ### From Packages
+ 
+-Swaylock is available in many distributions. Try installing the "swaylock"
+-package for yours.
+-
+-If you're interested in packaging swaylock for your distribution, stop by the
+-IRC channel or shoot an email to sir@cmpwn.com for advice.
++* Alpine Linux: [swaylock-effects](https://pkgs.alpinelinux.org/packages?name=swaylock-effects)
++* Arch Linux (AUR): [swaylock-effects-git](https://aur.archlinux.org/packages/swaylock-effects-git/)
++* Fedora (Copr): [swaylock-effects](https://copr.fedorainfracloud.org/coprs/eddsalkield/swaylock-effects/)
++  (thanks to Edd Salkield)
++* FreeBSD: [swaylock-effects](https://www.freshports.org/x11/swaylock-effects/)
++* Gentoo (GURU overlay): [swaylock-effects](https://gpo.zugaina.org/Overlays/guru/gui-apps/swaylock-effects)
++* T2 SDE: [swaylock-effects](https://t2sde.org/packages/swaylock-effects)
+ 
+ ### Compiling from Source
+ 
+@@ -39,19 +88,93 @@
+ * pam (optional)
+ * [scdoc](https://git.sr.ht/~sircmpwn/scdoc) (optional: man pages) \*
+ * git \*
++* openmp (if using a compiler other than GCC)
+ 
+ _\*Compile-time dep_
+ 
+-_\*\*optional: required for background images other than PNG_
++_\*\*Optional: required for background images other than PNG_
+ 
+ Run these commands:
+ 
+-    meson build
+-    ninja -C build
+-    sudo ninja -C build install
++	meson build
++	ninja -C build
++	sudo ninja -C build install
+ 
+ On systems without PAM, you need to suid the swaylock binary:
+ 
+-    sudo chmod a+s /usr/local/bin/swaylock
++	sudo chmod a+s /usr/local/bin/swaylock
+ 
+ Swaylock will drop root permissions shortly after startup.
++
++## Effects
++
++### Blur
++
++`--effect-blur <radius>x<times>`: Blur the image.
++
++`<radius>` is a number specifying how big
++the blur is, `<times>` is a number which specifies essentially how high quality the blur is
++(i.e how closely the effect will resemble a true gaussian blur).
++
++### Pixelate
++
++`--effect-pixelate <factor>`: Pixelate the image.
++
++`<factor>` is the amount of pixelation; a value of 10 will make each 10x10 square of pixels
++the same color.
++
++### Scale
++
++`--effect-scale <scale>`: Scale the image by a factor.
++
++This effect scales the internal buffer. This has a few uses:
++
++* Use `--effect-scale` in combination with `--scaling` to create a zoom effect:
++  `--efect-scale 1.1 --scaling center`
++* Speed up other effects by making the resolution smaller: with
++  `--effect-scale 0.5 --effect-blur 7x5 --effect-scale 2`, swaylock-effect needs to blur
++  only 1/4 as many pixels.
++
++### Greyscale
++
++`--effect-greyscale`: Make the displayed image greyscale.
++
++### Vignette
++
++`--effect-vignette <base>:<factor>`: Apply a vignette effect.
++Base and factor should be between 0 and 1.
++
++### Compose
++
++`--effect-compose "<position>;<size>;<gravity>;<path>"`: Overlay another image to your lock screen.
++
++* `<position>`: Optional. The position on the screen to put the image, as `<x>,<y>`.
++	* Can be a percentage (`10%,10%`), a number of pixels (`20,20`), or a mix (`30%,40`).
++	* A negative number indicates that number of pixels away from the right/bottom instead of
++	  from the top/left; `-1,-1` would be the bottom right pixel.
++	* Default: `50%,50%`.
++* `<size>`: Optional. The size of the image on the screen, as `<w>x<h>`.
++	* Can be a percentage (`10%x10%`), a number of pixels (`20x20`), or a mix (`30%x40`).
++	* If the width is `-1`, the width is figured out based on the height and aspect ratio.
++	* If the height is `-1`, the height is figured out based on the width and aspect ratio.
++	* Default: The size of the image file.
++* `<gravity>`: Optional. Determine which point of the image is placed at `<position>`.
++	* Possible values: `center`, `north`, `south`, `west`, `east`,
++	  `northwest`, `northeast`, southwest`, `southeast`.
++	* With a `<gravity>` of `northwest`, `<position>` gives the location of the top/left
++	  corner of the image; with `southeast`, `<position>` controls the bottom/right corner,
++	  `center` controls the middle of the image, etc.
++	* Default: `center` if no `<position>` is given; otherwise, intelligently decide a gravity
++	  based on position (`10,10` -> northwest, `-10,10` -> northeast, etc).
++* `<path>`: The path to an image file.
++
++This command requires swaylock-effects to be compiled with gdk-pixbuf2.
++It supports all image formats gdk-pixbuf2 supports; on my system, that's
++png, jpeg, gif, svg, bmp, ico, tiff, wmf, ani, icns, pnm, qtif, tga, xbm and xpm.
++
++### Custom
++
++`--effect-custom <path>`: Load a custom effect from a shared object.
++
++The .so must export a function `void swaylock_effect(uint32_t *data, int width, int height)`
++or a function `uint32_t swaylock_pixel(uint32_t pix, int x, int y, int width, int height)`.
+diff -urN swaylock-1.5/render.c swaylock-effects/render.c
+--- swaylock-1.5/render.c	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/render.c	2022-01-29 23:27:40.720097161 +0100
+@@ -1,5 +1,7 @@
+ #include <math.h>
+ #include <stdlib.h>
++#include <time.h>
++#include <locale.h>
+ #include <wayland-client.h>
+ #include "cairo.h"
+ #include "background-image.h"
+@@ -32,6 +34,35 @@
+ 	}
+ }
+ 
++static void timetext(struct swaylock_surface *surface, char **tstr, char **dstr) {
++	static char dbuf[256];
++	static char tbuf[256];
++
++	// Use user's locale for strftime calls
++	char *prevloc = setlocale(LC_TIME, NULL);
++	setlocale(LC_TIME, "");
++
++	time_t t = time(NULL);
++	struct tm *tm = localtime(&t);
++
++	if (surface->state->args.timestr[0]) {
++		strftime(tbuf, sizeof(tbuf), surface->state->args.timestr, tm);
++		*tstr = tbuf;
++	} else {
++		*tstr = NULL;
++	}
++
++	if (surface->state->args.datestr[0]) {
++		strftime(dbuf, sizeof(dbuf), surface->state->args.datestr, tm);
++		*dstr = dbuf;
++	} else {
++		*dstr = NULL;
++	}
++
++	// Set it back, so we don't break stuff
++	setlocale(LC_TIME, prevloc);
++}
++
+ void render_frame_background(struct swaylock_surface *surface) {
+ 	struct swaylock_state *state = surface->state;
+ 
+@@ -64,6 +95,46 @@
+ 
+ 	wl_surface_set_buffer_scale(surface->surface, surface->scale);
+ 	wl_surface_attach(surface->surface, surface->current_buffer->buffer, 0, 0);
++	wl_surface_damage_buffer(surface->surface, 0, 0, INT32_MAX, INT32_MAX);
++	wl_surface_commit(surface->surface);
++}
++
++void render_background_fade(struct swaylock_surface *surface, uint32_t time) {
++	struct swaylock_state *state = surface->state;
++
++	int buffer_width = surface->width * surface->scale;
++	int buffer_height = surface->height * surface->scale;
++	if (buffer_width == 0 || buffer_height == 0) {
++		return; // not yet configured
++	}
++
++	if (fade_is_complete(&surface->fade)) {
++		return;
++	}
++
++	surface->current_buffer = get_next_buffer(state->shm,
++			surface->buffers, buffer_width, buffer_height);
++	if (surface->current_buffer == NULL) {
++		return;
++	}
++
++	fade_update(&surface->fade, surface->current_buffer, time);
++
++	wl_surface_set_buffer_scale(surface->surface, surface->scale);
++	wl_surface_attach(surface->surface, surface->current_buffer->buffer, 0, 0);
++	wl_surface_damage(surface->surface, 0, 0, surface->width, surface->height);
++	wl_surface_commit(surface->surface);
++}
++
++void render_background_fade_prepare(struct swaylock_surface *surface, struct pool_buffer *buffer) {
++	if (fade_is_complete(&surface->fade)) {
++		return;
++	}
++
++	fade_prepare(&surface->fade, buffer);
++
++	wl_surface_set_buffer_scale(surface->surface, surface->scale);
++	wl_surface_attach(surface->surface, surface->current_buffer->buffer, 0, 0);
+ 	wl_surface_damage(surface->surface, 0, 0, surface->width, surface->height);
+ 	wl_surface_commit(surface->surface);
+ }
+@@ -132,29 +203,48 @@
+ 	float type_indicator_border_thickness =
+ 		TYPE_INDICATOR_BORDER_THICKNESS * surface->scale;
+ 
+-	if (state->args.show_indicator && (state->auth_state != AUTH_STATE_IDLE ||
+-			state->args.indicator_idle_visible)) {
+-		// Draw circle
++	// This is a bit messy.
++	// After the fork, upstream added their own --indicator-idle-visible option,
++	// but it works slightly differently from swaylock-effects' --indicator
++	// option. To maintain compatibility with upstream swaylock scripts as well
++	// as with old swaylock-effects scripts, I will keep both flags.
++	bool upstream_show_indicator =
++		state->args.show_indicator && (state->auth_state != AUTH_STATE_IDLE ||
++			state->args.indicator_idle_visible);
++
++	if (state->args.indicator ||
++			(upstream_show_indicator && state->auth_state != AUTH_STATE_GRACE)) {
++		// Fill inner circle
++		cairo_set_line_width(cairo, 0);
++		cairo_arc(cairo, buffer_width / 2, buffer_diameter / 2,
++				arc_radius - arc_thickness / 2, 0, 2 * M_PI);
++		set_color_for_state(cairo, state, &state->args.colors.inside);
++		cairo_fill_preserve(cairo);
++		cairo_stroke(cairo);
++
++		// Draw ring
+ 		cairo_set_line_width(cairo, arc_thickness);
+ 		cairo_arc(cairo, buffer_width / 2, buffer_diameter / 2, arc_radius,
+ 				0, 2 * M_PI);
+-		set_color_for_state(cairo, state, &state->args.colors.inside);
+-		cairo_fill_preserve(cairo);
+ 		set_color_for_state(cairo, state, &state->args.colors.ring);
+ 		cairo_stroke(cairo);
+ 
+ 		// Draw a message
+ 		char *text = NULL;
++		char *text_l1 = NULL;
++		char *text_l2 = NULL;
+ 		const char *layout_text = NULL;
++		double font_size;
+ 		char attempts[4]; // like i3lock: count no more than 999
+ 		set_color_for_state(cairo, state, &state->args.colors.text);
+ 		cairo_select_font_face(cairo, state->args.font,
+ 				CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+ 		if (state->args.font_size > 0) {
+-			cairo_set_font_size(cairo, state->args.font_size);
++			font_size = state->args.font_size;
+ 		} else {
+-			cairo_set_font_size(cairo, arc_radius / 3.0f);
++			font_size = arc_radius / 3.0f;
+ 		}
++		cairo_set_font_size(cairo, font_size);
+ 		switch (state->auth_state) {
+ 		case AUTH_STATE_VALIDATING:
+ 			text = "verifying";
+@@ -179,6 +269,8 @@
+ 					snprintf(attempts, sizeof(attempts), "%d", state->failed_attempts);
+ 					text = attempts;
+ 				}
++			} else if (state->args.clock) {
++				timetext(surface, &text_l1, &text_l2);
+ 			}
+ 
+ 			xkb_layout_index_t num_layout = xkb_keymap_num_layouts(state->xkb.keymap);
+@@ -197,9 +289,16 @@
+ 			}
+ 			break;
+ 		default:
++			if (state->args.clock)
++				timetext(surface, &text_l1, &text_l2);
+ 			break;
+ 		}
+ 
++		if (text_l1 && !text_l2)
++			text = text_l1;
++		if (text_l2 && !text_l1)
++			text = text_l2;
++
+ 		if (text) {
+ 			cairo_text_extents_t extents;
+ 			cairo_font_extents_t fe;
+@@ -219,14 +318,60 @@
+ 			if (new_width < extents.width) {
+ 				new_width = extents.width;
+ 			}
++		} else if (text_l1 && text_l2) {
++			cairo_text_extents_t extents_l1, extents_l2;
++			cairo_font_extents_t fe_l1, fe_l2;
++			double x_l1, y_l1, x_l2, y_l2;
++
++			/* Top */
++
++			cairo_text_extents(cairo, text_l1, &extents_l1);
++			cairo_font_extents(cairo, &fe_l1);
++			x_l1 = (buffer_width / 2) -
++				(extents_l1.width / 2 + extents_l1.x_bearing);
++			y_l1 = (buffer_diameter / 2) +
++				(fe_l1.height / 2 - fe_l1.descent) - arc_radius / 10.0f;
++
++			cairo_move_to(cairo, x_l1, y_l1);
++			cairo_show_text(cairo, text_l1);
++			cairo_close_path(cairo);
++			cairo_new_sub_path(cairo);
++
++			/* Bottom */
++
++			cairo_set_font_size(cairo, arc_radius / 6.0f);
++			cairo_text_extents(cairo, text_l2, &extents_l2);
++			cairo_font_extents(cairo, &fe_l2);
++			x_l2 = (buffer_width / 2) -
++				(extents_l2.width / 2 + extents_l2.x_bearing);
++			y_l2 = (buffer_diameter / 2) +
++				(fe_l2.height / 2 - fe_l2.descent) + arc_radius / 3.5f;
++
++			cairo_move_to(cairo, x_l2, y_l2);
++			cairo_show_text(cairo, text_l2);
++			cairo_close_path(cairo);
++			cairo_new_sub_path(cairo);
++
++			if (new_width < extents_l1.width)
++				new_width = extents_l1.width;
++			if (new_width < extents_l2.width)
++				new_width = extents_l2.width;
++
++
++			cairo_set_font_size(cairo, font_size);
+ 		}
+ 
+ 		// Typing indicator: Highlight random part on keypress
+ 		if (state->auth_state == AUTH_STATE_INPUT
+ 				|| state->auth_state == AUTH_STATE_BACKSPACE) {
++
+ 			static double highlight_start = 0;
+-			highlight_start +=
+-				(rand() % (int)(M_PI * 100)) / 100.0 + M_PI * 0.5;
++			if (state->indicator_dirty) {
++				highlight_start +=
++					(rand() % (int)(M_PI * 100)) / 100.0 + M_PI * 0.5;
++				state->indicator_dirty = false;
++			}
++
+ 			cairo_arc(cairo, buffer_width / 2, buffer_diameter / 2,
+ 					arc_radius, highlight_start,
+ 					highlight_start + TYPE_INDICATOR_RANGE);
+@@ -269,7 +414,7 @@
+ 				arc_radius + arc_thickness / 2, 0, 2 * M_PI);
+ 		cairo_stroke(cairo);
+ 
+-		// display layout text seperately
++		// display layout text separately
+ 		if (layout_text) {
+ 			cairo_text_extents_t extents;
+ 			cairo_font_extents_t fe;
+@@ -304,18 +449,23 @@
+ 				new_width = extents.width + 2 * box_padding;
+ 			}
+ 		}
++	}
+ 
+-		if (buffer_width != new_width || buffer_height != new_height) {
+-			destroy_buffer(surface->current_buffer);
+-			surface->indicator_width = new_width;
+-			surface->indicator_height = new_height;
+-			render_frame(surface);
+-		}
++	// Ensure buffer size is multiple of buffer scale - required by protocol
++	new_height += surface->scale - (new_height % surface->scale);
++	new_width += surface->scale - (new_width % surface->scale);
++
++	if (buffer_width != new_width || buffer_height != new_height) {
++		destroy_buffer(surface->current_buffer);
++		surface->indicator_width = new_width;
++		surface->indicator_height = new_height;
++		render_frame(surface);
++		return;
+ 	}
+ 
+ 	wl_surface_set_buffer_scale(surface->child, surface->scale);
+ 	wl_surface_attach(surface->child, surface->current_buffer->buffer, 0, 0);
+-	wl_surface_damage(surface->child, 0, 0, surface->current_buffer->width, surface->current_buffer->height);
++	wl_surface_damage_buffer(surface->child, 0, 0, INT32_MAX, INT32_MAX);
+ 	wl_surface_commit(surface->child);
+ 
+ 	wl_surface_commit(surface->surface);
+Binary files swaylock-1.5/screenshot.png and swaylock-effects/screenshot.png differ
+diff -urN swaylock-1.5/seat.c swaylock-effects/seat.c
+--- swaylock-1.5/seat.c	2020-01-22 17:19:47.000000000 +0100
++++ swaylock-effects/seat.c	2022-01-29 23:27:40.724097140 +0100
+@@ -6,25 +6,27 @@
+ #include "log.h"
+ #include "swaylock.h"
+ #include "seat.h"
++#include "loop.h"
+ 
+ static void keyboard_keymap(void *data, struct wl_keyboard *wl_keyboard,
+ 		uint32_t format, int32_t fd, uint32_t size) {
+-	struct swaylock_state *state = data;
++	struct swaylock_seat *seat = data;
++	struct swaylock_state *state = seat->state;
+ 	if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
+ 		close(fd);
+ 		swaylock_log(LOG_ERROR, "Unknown keymap format %d, aborting", format);
+ 		exit(1);
+ 	}
+-	char *map_shm = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
++	char *map_shm = mmap(NULL, size - 1, PROT_READ, MAP_PRIVATE, fd, 0);
+ 	if (map_shm == MAP_FAILED) {
+ 		close(fd);
+ 		swaylock_log(LOG_ERROR, "Unable to initialize keymap shm, aborting");
+ 		exit(1);
+ 	}
+-	struct xkb_keymap *keymap = xkb_keymap_new_from_string(
+-			state->xkb.context, map_shm, XKB_KEYMAP_FORMAT_TEXT_V1,
++	struct xkb_keymap *keymap = xkb_keymap_new_from_buffer(
++			state->xkb.context, map_shm, size - 1, XKB_KEYMAP_FORMAT_TEXT_V1,
+ 			XKB_KEYMAP_COMPILE_NO_FLAGS);
+-	munmap(map_shm, size);
++	munmap(map_shm, size - 1);
+ 	close(fd);
+ 	assert(keymap);
+ 	struct xkb_state *xkb_state = xkb_state_new(keymap);
+@@ -45,9 +47,18 @@
+ 	// Who cares
+ }
+ 
++static void keyboard_repeat(void *data) {
++	struct swaylock_seat *seat = data;
++	struct swaylock_state *state = seat->state;
++	seat->repeat_timer = loop_add_timer(
++		state->eventloop, seat->repeat_period_ms, keyboard_repeat, seat);
++	swaylock_handle_key(state, seat->repeat_sym, seat->repeat_codepoint);
++}
++
+ static void keyboard_key(void *data, struct wl_keyboard *wl_keyboard,
+ 		uint32_t serial, uint32_t time, uint32_t key, uint32_t _key_state) {
+-	struct swaylock_state *state = data;
++	struct swaylock_seat *seat = data;
++	struct swaylock_state *state = seat->state;
+ 	enum wl_keyboard_key_state key_state = _key_state;
+ 	xkb_keysym_t sym = xkb_state_key_get_one_sym(state->xkb.state, key + 8);
+ 	uint32_t keycode = key_state == WL_KEYBOARD_KEY_STATE_PRESSED ?
+@@ -56,12 +67,25 @@
+ 	if (key_state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+ 		swaylock_handle_key(state, sym, codepoint);
+ 	}
++
++	if (seat->repeat_timer) {
++		loop_remove_timer(seat->state->eventloop, seat->repeat_timer);
++		seat->repeat_timer = NULL;
++	}
++
++	if (key_state == WL_KEYBOARD_KEY_STATE_PRESSED && seat->repeat_period_ms > 0) {
++		seat->repeat_sym = sym;
++		seat->repeat_codepoint = codepoint;
++		seat->repeat_timer = loop_add_timer(
++			seat->state->eventloop, seat->repeat_delay_ms, keyboard_repeat, seat);
++	}
+ }
+ 
+ static void keyboard_modifiers(void *data, struct wl_keyboard *wl_keyboard,
+ 		uint32_t serial, uint32_t mods_depressed, uint32_t mods_latched,
+ 		uint32_t mods_locked, uint32_t group) {
+-	struct swaylock_state *state = data;
++	struct swaylock_seat *seat = data;
++	struct swaylock_state *state = seat->state;
+ 	int layout_same = xkb_state_layout_index_is_active(state->xkb.state,
+ 		group, XKB_STATE_LAYOUT_EFFECTIVE);
+ 	if (!layout_same) {
+@@ -82,7 +106,14 @@
+ 
+ static void keyboard_repeat_info(void *data, struct wl_keyboard *wl_keyboard,
+ 		int32_t rate, int32_t delay) {
+-	// TODO
++	struct swaylock_seat *seat = data;
++	if (rate <= 0) {
++		seat->repeat_period_ms = -1;
++	} else {
++		// Keys per second -> milliseconds between keys
++		seat->repeat_period_ms = 1000 / rate;
++	}
++	seat->repeat_delay_ms = delay;
+ }
+ 
+ static const struct wl_keyboard_listener keyboard_listener = {
+@@ -107,17 +138,17 @@
+ 
+ static void wl_pointer_motion(void *data, struct wl_pointer *wl_pointer,
+ 		uint32_t time, wl_fixed_t surface_x, wl_fixed_t surface_y) {
+-	// Who cares
++	swaylock_handle_mouse((struct swaylock_state *)data);
+ }
+ 
+ static void wl_pointer_button(void *data, struct wl_pointer *wl_pointer,
+ 		uint32_t serial, uint32_t time, uint32_t button, uint32_t state) {
+-	// Who cares
++	swaylock_handle_mouse((struct swaylock_state *)data);
+ }
+ 
+ static void wl_pointer_axis(void *data, struct wl_pointer *wl_pointer,
+ 		uint32_t time, uint32_t axis, wl_fixed_t value) {
+-	// Who cares
++	swaylock_handle_mouse((struct swaylock_state *)data);
+ }
+ 
+ static void wl_pointer_frame(void *data, struct wl_pointer *wl_pointer) {
+@@ -151,6 +182,37 @@
+ 	.axis_discrete = wl_pointer_axis_discrete,
+ };
+ 
++static void wl_touch_down(void *data, struct wl_touch *touch, uint32_t serial,
++		uint32_t time, struct wl_surface *surface, int32_t id, wl_fixed_t x, wl_fixed_t y) {
++	swaylock_handle_touch((struct swaylock_state *)data);
++}
++
++static void wl_touch_up(void *data, struct wl_touch *touch, uint32_t serial,
++		uint32_t time, int32_t id) {
++	// Who cares
++}
++
++static void wl_touch_motion(void *data, struct wl_touch *touch, uint32_t time,
++		int32_t id, wl_fixed_t x, wl_fixed_t y) {
++	swaylock_handle_touch((struct swaylock_state *)data);
++}
++
++static void wl_touch_frame(void *data, struct wl_touch *touch) {
++	// Who cares
++}
++
++static void wl_touch_cancel(void *data, struct wl_touch *touch) {
++	// Who cares
++}
++
++static const struct wl_touch_listener touch_listener = {
++	.down = wl_touch_down,
++	.up = wl_touch_up,
++	.motion = wl_touch_motion,
++	.frame = wl_touch_frame,
++	.cancel = wl_touch_cancel,
++};
++
+ static void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
+ 		enum wl_seat_capability caps) {
+ 	struct swaylock_seat *seat = data;
+@@ -164,11 +226,15 @@
+ 	}
+ 	if ((caps & WL_SEAT_CAPABILITY_POINTER)) {
+ 		seat->pointer = wl_seat_get_pointer(wl_seat);
+-		wl_pointer_add_listener(seat->pointer, &pointer_listener, NULL);
++		wl_pointer_add_listener(seat->pointer, &pointer_listener, seat->state);
+ 	}
+ 	if ((caps & WL_SEAT_CAPABILITY_KEYBOARD)) {
+ 		seat->keyboard = wl_seat_get_keyboard(wl_seat);
+-		wl_keyboard_add_listener(seat->keyboard, &keyboard_listener, seat->state);
++		wl_keyboard_add_listener(seat->keyboard, &keyboard_listener, seat);
++	}
++	if ((caps & WL_SEAT_CAPABILITY_TOUCH)) {
++		seat->touch = wl_seat_get_touch(wl_seat);
++		wl_touch_add_listener(seat->touch, &touch_listener, seat->state);
+ 	}
+ }
+ 
+diff -urN swaylock-1.5/swaylock.1.scd swaylock-effects/swaylock.1.scd
+--- swaylock-1.5/swaylock.1.scd	2022-02-03 12:05:03.000000000 +0100
++++ swaylock-effects/swaylock.1.scd	2022-01-29 23:27:40.724097140 +0100
+@@ -2,7 +2,7 @@
+ 
+ # NAME
+ 
+-swaylock - Screen locker for Wayland
++swaylock-effects - Fancier screen locker for Wayland
+ 
+ # SYNOPSIS
+ 
+@@ -35,6 +35,25 @@
+ 
+ 	Note: this is the default behavior of i3lock.
+ 
++*--fade-in* <seconds>
++	Fade in the lock screen.
++
++*--submit-on-touch*
++	Submit password in response to a touch event.
++
++*--grace* <seconds>
++	Only require a password after some grace period.
++
++	Note: Together with *--indicator*, the indicator is always shown.
++	Together with *--indicator-idle-visible*, the indicator is only shown
++	after the grace period.
++
++*--grace-no-mouse*
++	With *--grace*, don't unlock in response to a mouse event.
++
++*--grace-no-touch*
++	With *--grace*, don't unlock in response to a touch event.
++
+ *-h, --help*
+ 	Show help message and quit.
+ 
+@@ -46,10 +65,25 @@
+ *-u, --no-unlock-indicator*
+ 	Disable the unlock indicator.
+ 
++*--indicator*
++	Always show the indicator.
++
++*--clock*
++	Show a clock in the indicator.
++
++*--timestr* <format>
++	The time format for the indicator clock. Defaults to '%T'.
++
++*--datestr* <format>
++	The date format for the indicator clock. Defaults to '%a, %x'.
++
+ *-i, --image* [[<output>]:]<path>
+ 	Display the given image, optionally only on the given output. Use -c to set
+-	a background color. If the path potentially contains a ':', prefix it with
+-	another ':' to prevent interpreting part of it as <output>.
++	a background color. If the path potentially contains a ':', prefix it with another
++	':' to prevent interpreting part of it as <output>.
++
++*-S, --screenshots*
++	Display a screenshot.
+ 
+ *-k, --show-keyboard-layout*
+ 	Display the current xkb layout while typing.
+@@ -101,6 +135,12 @@
+ *--indicator-thickness* <thickness>
+ 	Sets the indicator thickness. The default value is 10.
+ 
++*--indicator-x-position* <x>
++	Sets the horizontal position of the indicator.
++
++*--indicator-y-position* <y>
++	Sets the vertical position of the indicator.
++
+ *--inside-color* <rrggbb[aa]>
+ 	Sets the color of the inside of the indicator.
+ 
+@@ -183,8 +223,38 @@
+ *--text-wrong-color* <rrggbb[aa]>
+ 	Sets the color of the text when invalid.
+ 
++*--effect-blur* <radius>x<times>
++	Blur displayed images.
++
++*--effect-pixelate* <factor>
++	Pixelate displayed images.
++
++*--effect-scale* <scale>
++	Scale the image by a factor. This can be used to
++	make other effects faster if you don't need the full resolution.
++
++*--effect-greyscale*
++	Make the displayed image greyscale.
++
++*--effect-vignette <base>:<factor>*
++	Apply a vignette effect to images.
++	Base and factor should be numbers between 0 and 1.
++
++*--effect-compose <position>;<size>;<gravity>;<path>*
++	Overlay another image to your lock screen.
++	The _position_, _size_ and _gravity_ part is optional.
++
++*--effect-custom <path>*
++	Load a custom effect from a shared object. The .so must export a++
++*void swaylock_effect(uint32\_t \*data, int width, int height, int scale)*++
++or an *uint32\_t swaylock_pixel(uint32\_t pix, int x, int y, int width, int height)*.
++
++*--time-effects*
++	Measure the time it takes to run each effect.
++
+ # AUTHORS
+ 
+-Maintained by Drew DeVault <sir@cmpwn.com>, who is assisted by other open
+-source contributors. For more information about swaylock development, see
+-https://github.com/swaywm/swaylock.
++Maintained by Martin Dørum, forked from upstream Swaylock which is maintained
++by Drew DeVault.
++For more information about swaylock-effects development, see
++https://github.com/mortie/swaylock-effects.
+diff -urN swaylock-1.5/wlr-layer-shell-unstable-v1.xml swaylock-effects/wlr-layer-shell-unstable-v1.xml
+diff -urN swaylock-1.5/wlr-screencopy-unstable-v1.xml swaylock-effects/wlr-screencopy-unstable-v1.xml
+--- swaylock-1.5/wlr-screencopy-unstable-v1.xml	1970-01-01 01:00:00.000000000 +0100
++++ swaylock-effects/wlr-screencopy-unstable-v1.xml	2022-01-29 23:27:40.724097140 +0100
+@@ -0,0 +1,179 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<protocol name="wlr_screencopy_unstable_v1">
++  <copyright>
++    Copyright © 2018 Simon Ser
++
++    Permission is hereby granted, free of charge, to any person obtaining a
++    copy of this software and associated documentation files (the "Software"),
++    to deal in the Software without restriction, including without limitation
++    the rights to use, copy, modify, merge, publish, distribute, sublicense,
++    and/or sell copies of the Software, and to permit persons to whom the
++    Software is furnished to do so, subject to the following conditions:
++
++    The above copyright notice and this permission notice (including the next
++    paragraph) shall be included in all copies or substantial portions of the
++    Software.
++
++    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++    DEALINGS IN THE SOFTWARE.
++  </copyright>
++
++  <description summary="screen content capturing on client buffers">
++    This protocol allows clients to ask the compositor to copy part of the
++    screen content to a client buffer.
++
++    Warning! The protocol described in this file is experimental and
++    backward incompatible changes may be made. Backward compatible changes
++    may be added together with the corresponding interface version bump.
++    Backward incompatible changes are done by bumping the version number in
++    the protocol and interface names and resetting the interface version.
++    Once the protocol is to be declared stable, the 'z' prefix and the
++    version number in the protocol and interface names are removed and the
++    interface version number is reset.
++  </description>
++
++  <interface name="zwlr_screencopy_manager_v1" version="1">
++    <description summary="manager to inform clients and begin capturing">
++      This object is a manager which offers requests to start capturing from a
++      source.
++    </description>
++
++    <request name="capture_output">
++      <description summary="capture an output">
++        Capture the next frame of an entire output.
++      </description>
++      <arg name="frame" type="new_id" interface="zwlr_screencopy_frame_v1"/>
++      <arg name="overlay_cursor" type="int"
++        summary="composite cursor onto the frame"/>
++      <arg name="output" type="object" interface="wl_output"/>
++    </request>
++
++    <request name="capture_output_region">
++      <description summary="capture an output's region">
++        Capture the next frame of an output's region.
++
++        The region is given in output logical coordinates, see
++        xdg_output.logical_size. The region will be clipped to the output's
++        extents.
++      </description>
++      <arg name="frame" type="new_id" interface="zwlr_screencopy_frame_v1"/>
++      <arg name="overlay_cursor" type="int"
++        summary="composite cursor onto the frame"/>
++      <arg name="output" type="object" interface="wl_output"/>
++      <arg name="x" type="int"/>
++      <arg name="y" type="int"/>
++      <arg name="width" type="int"/>
++      <arg name="height" type="int"/>
++    </request>
++
++    <request name="destroy" type="destructor">
++      <description summary="destroy the manager">
++        All objects created by the manager will still remain valid, until their
++        appropriate destroy request has been called.
++      </description>
++    </request>
++  </interface>
++
++  <interface name="zwlr_screencopy_frame_v1" version="1">
++    <description summary="a frame ready for copy">
++      This object represents a single frame.
++
++      When created, a "buffer" event will be sent. The client will then be able
++      to send a "copy" request. If the capture is successful, the compositor
++      will send a "flags" followed by a "ready" event.
++
++      If the capture failed, the "failed" event is sent. This can happen anytime
++      before the "ready" event.
++
++      Once either a "ready" or a "failed" event is received, the client should
++      destroy the frame.
++    </description>
++
++    <event name="buffer">
++      <description summary="buffer information">
++        Provides information about the frame's buffer. This event is sent once
++        as soon as the frame is created.
++
++        The client should then create a buffer with the provided attributes, and
++        send a "copy" request.
++      </description>
++      <arg name="format" type="uint" summary="buffer format"/>
++      <arg name="width" type="uint" summary="buffer width"/>
++      <arg name="height" type="uint" summary="buffer height"/>
++      <arg name="stride" type="uint" summary="buffer stride"/>
++    </event>
++
++    <request name="copy">
++      <description summary="copy the frame">
++        Copy the frame to the supplied buffer. The buffer must have a the
++        correct size, see zwlr_screencopy_frame_v1.buffer. The buffer needs to
++        have a supported format.
++
++        If the frame is successfully copied, a "flags" and a "ready" events are
++        sent. Otherwise, a "failed" event is sent.
++      </description>
++      <arg name="buffer" type="object" interface="wl_buffer"/>
++    </request>
++
++    <enum name="error">
++      <entry name="already_used" value="0"
++        summary="the object has already been used to copy a wl_buffer"/>
++      <entry name="invalid_buffer" value="1"
++        summary="buffer attributes are invalid"/>
++    </enum>
++
++    <enum name="flags" bitfield="true">
++      <entry name="y_invert" value="1" summary="contents are y-inverted"/>
++    </enum>
++
++    <event name="flags">
++      <description summary="frame flags">
++        Provides flags about the frame. This event is sent once before the
++        "ready" event.
++      </description>
++      <arg name="flags" type="uint" enum="flags" summary="frame flags"/>
++    </event>
++
++    <event name="ready">
++      <description summary="indicates frame is available for reading">
++        Called as soon as the frame is copied, indicating it is available
++        for reading. This event includes the time at which presentation happened
++        at.
++
++        The timestamp is expressed as tv_sec_hi, tv_sec_lo, tv_nsec triples,
++        each component being an unsigned 32-bit value. Whole seconds are in
++        tv_sec which is a 64-bit value combined from tv_sec_hi and tv_sec_lo,
++        and the additional fractional part in tv_nsec as nanoseconds. Hence,
++        for valid timestamps tv_nsec must be in [0, 999999999]. The seconds part
++        may have an arbitrary offset at start.
++
++        After receiving this event, the client should destroy the object.
++      </description>
++      <arg name="tv_sec_hi" type="uint"
++           summary="high 32 bits of the seconds part of the timestamp"/>
++      <arg name="tv_sec_lo" type="uint"
++           summary="low 32 bits of the seconds part of the timestamp"/>
++      <arg name="tv_nsec" type="uint"
++           summary="nanoseconds part of the timestamp"/>
++    </event>
++
++    <event name="failed">
++      <description summary="frame copy failed">
++        This event indicates that the attempted frame copy has failed.
++
++        After receiving this event, the client should destroy the object.
++      </description>
++    </event>
++
++    <request name="destroy" type="destructor">
++      <description summary="delete this object, used or not">
++        Destroys the frame. This request can be sent at any time by the client.
++      </description>
++    </request>
++  </interface>
++</protocol>

@@ -1,11 +1,12 @@
-swaylock (1.5-3) UNRELEASED; urgency=low
+swaylock (1.5-3eff~a8fc557) testing; urgency=low
 
   * Set field Upstream-Name in debian/copyright.
   * Set upstream metadata fields: Bug-Database, Bug-Submit.
   * Remove obsolete field Name from debian/upstream/metadata (already present in
     machine-readable debian/copyright).
+  * debian/patches/Swaylock-Effects.patch: add Swaylock-Effects patch
 
- -- Debian Janitor <janitor@jelmer.uk>  Thu, 27 Aug 2020 15:56:31 -0000
+ -- Franco Lucchini <flucchini@gmail.com>  Thu, 03 Feb 2022 12:24:08 +0100
 
 swaylock (1.5-2) unstable; urgency=medium
 
